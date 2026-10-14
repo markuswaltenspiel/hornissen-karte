@@ -1,0 +1,11 @@
+{
+  "stand": "2026-10-14T09:05+02:00",
+  "anzahl": {
+    "nester": 8628,
+    "einzeltiere": 11710,
+    "gesamt": 16144
+  },
+  "saison_start_monat": 4,
+  "sekundaer_ab_monat": 8,
+  "quelle": "https://www.arcgishostedserver.nrw.de/arcgis/rest/services/Hosted (LANUK NRW)"
+}
