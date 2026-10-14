@@ -521,6 +521,7 @@ function zeige(ansicht) {
   if (ansicht === "karte") karte.invalidateSize();
   if (ansicht === "vergleich") initVergleich();
   if (ansicht === "statistik") statistik();
+  if (ansicht === "deutschland") initDeutschland().catch((e) => { $("#de-datum").textContent = "Fehler: " + e.message; console.error(e); });
 }
 
 function neuZeichnen() {

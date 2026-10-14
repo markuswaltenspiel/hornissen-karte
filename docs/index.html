@@ -46,7 +46,9 @@ aside .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
 .dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
 .dot.ring { background: transparent !important; border: 2.5px solid; }
 .kartenwrap { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-#karte { flex: 1; min-height: 0; }
+#karte, #karte-de { flex: 1; min-height: 0; }
+.de-tabelle { max-height: 34vh; overflow-y: auto; border-top: 1px solid var(--border); padding: 12px 16px; max-width: none; }
+#view-deutschland aside { width: 290px; flex-shrink: 0; overflow-y: auto; background: var(--surface); border-right: 1px solid var(--border); padding: 12px 14px; }
 .zeitleiste { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: var(--surface); border-top: 1px solid var(--border); }
 .zeitleiste button { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; min-width: 38px; }
 .zeitleiste input[type=range] { flex: 1; }
@@ -97,7 +99,9 @@ svg .grid { stroke: var(--border); stroke-width: 1; }
 @media (max-width: 760px) {
   main { flex-direction: column; }
   #view-karte { flex-direction: column; }
-  #view-karte aside { width: auto; max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--border); }
+  #view-karte aside, .de-tabelle { max-height: 34vh; overflow-y: auto; border-top: 1px solid var(--border); padding: 12px 16px; max-width: none; }
+#view-deutschland aside { width: auto; max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--border); }
+  #view-deutschland { flex-direction: column; }
   .vgl-karten { grid-template-columns: 1fr; height: auto; }
   .vgl-karte .map { height: 45vh; flex: none; }
   header label { margin-left: 0; }
@@ -112,6 +116,7 @@ svg .grid { stroke: var(--border); stroke-width: 1; }
     <button role="tab" data-view="karte" aria-selected="true">Karte</button>
     <button role="tab" data-view="vergleich" aria-selected="false">Jahresvergleich</button>
     <button role="tab" data-view="statistik" aria-selected="false">Statistik</button>
+    <button role="tab" data-view="deutschland" aria-selected="false">Deutschland</button>
   </nav>
   <label><input type="checkbox" id="f-unfrei"> nicht freigegebene Meldungen einbeziehen</label>
 </header>
@@ -174,6 +179,33 @@ svg .grid { stroke: var(--border); stroke-width: 1; }
     </div>
   </section>
 
+  <section class="view" id="view-deutschland">
+    <aside>
+      <h2>Darstellung</h2>
+      <label><input type="radio" name="de-modus" value="kumuliert" checked> alle Funde bis zum Datum</label>
+      <label><input type="radio" name="de-modus" value="jahr"> nur Funde der letzten 12 Monate</label>
+      <h2>Fundjahr</h2>
+      <div id="de-legende"></div>
+      <h2>Art des Fundes</h2>
+      <label><input type="checkbox" class="de-typ" value="N" checked><span class="dot" style="background:var(--text-2);width:9px;height:9px"></span>Nester<span class="n" data-de="N"></span></label>
+      <label><input type="checkbox" class="de-typ" value="E" checked><span class="dot" style="background:var(--text-2);width:5px;height:5px"></span>Einzeltiere und Sichtungen<span class="n" data-de="E"></span></label>
+      <h2>Quellen</h2>
+      <div id="de-quellen"></div>
+      <p class="hint">Behördendaten: LANUK (NRW) und HLNUG (Hessen, nur 2025/26). Übrige Länder über GBIF (NABU|naturgucker, Observation.org, iNaturalist, ArtenFinder u. a.), ohne Nest-Angabe. Sichtungen, die schon in einer Behördenquelle stehen (≤ 50 m, ±3 Tage), sind entfernt. Die Dichte hängt stark davon ab, wo wie eifrig gemeldet wird.</p>
+    </aside>
+    <div class="kartenwrap">
+      <div id="karte-de"></div>
+      <div class="zeitleiste">
+        <button id="de-play" title="Abspielen">▶</button>
+        <span class="datum" id="de-datum"></span>
+        <input type="range" id="de-zeit" min="0" max="0" value="0" aria-label="Zeitleiste Deutschland">
+        <select id="de-tempo" title="Tempo"><option value="7">1 Woche/Schritt</option><option value="14" selected>2 Wochen/Schritt</option><option value="30">1 Monat/Schritt</option></select>
+        <select id="de-sprung" title="Zu einem Jahr springen"></select>
+        <button id="de-ende" title="Zum heutigen Stand">⏭</button>
+      </div>
+    </div>
+  </section>
+
   <section class="view" id="view-statistik">
     <div class="inhalt" id="statistik"></div>
   </section>
@@ -181,5 +213,6 @@ svg .grid { stroke: var(--border); stroke-width: 1; }
 <div id="tooltip"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="app.js"></script>
+<script src="deutschland.js"></script>
 </body>
 </html>

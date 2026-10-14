@@ -265,13 +265,29 @@ def hole_json(url):
             time.sleep(5 * (versuch + 1))
 
 
-def hole_gbif(heute):
-    """Alle Vespa-velutina-Funde in NRW aus GBIF, reduziert auf Ort, Datum, Quelle und Link."""
+def hole_gbif(heute, gebiet=None):
+    """Vespa-velutina-Funde aus GBIF (Standard: NRW), reduziert auf Ort, Datum, Quelle und Link.
+    Abfrage je Jahr und Monat, weil GBIF bei tiefen Seiten (offset > ~5000) sehr langsam wird."""
+    gebiet = gebiet or {"gadmGid": GBIF_GADM}
+    out = []
+    for jahr in range(2014, heute.year + 1):
+        zahl = hole_json(f"{GBIF_API}?" + urllib.parse.urlencode(dict(
+            taxonKey=GBIF_TAXON, year=jahr, limit=0, **gebiet)))["count"]
+        if not zahl:
+            continue
+        monate = range(1, 13) if zahl > 2000 else [None]
+        for monat in monate:
+            teil = dict(gebiet, year=jahr, **({"month": monat} if monat else {}))
+            out += hole_gbif_teil(heute, teil)
+    return out
+
+
+def hole_gbif_teil(heute, gebiet):
     out, offset = [], 0
     while True:
         q = urllib.parse.urlencode(dict(
-            taxonKey=GBIF_TAXON, gadmGid=GBIF_GADM, hasCoordinate="true", hasGeospatialIssue="false",
-            occurrenceStatus="PRESENT", limit=300, offset=offset))
+            taxonKey=GBIF_TAXON, hasCoordinate="true", hasGeospatialIssue="false",
+            occurrenceStatus="PRESENT", limit=300, offset=offset, **gebiet))
         d = hole_json(f"{GBIF_API}?{q}")
         for r in d["results"]:
             unsicher = r.get("coordinateUncertaintyInMeters")
@@ -291,10 +307,63 @@ def hole_gbif(heute):
                 "q": GBIF_QUELLEN.get(r.get("datasetKey"), r.get("datasetName") or "GBIF"),
                 "lic": lizenz_kurz(r.get("license", "")),
                 "url": ref if ref.startswith("http") else None,
+                "land": ((r.get("gadm") or {}).get("level1") or {}).get("name") or r.get("stateProvince"),
             })
         offset += len(d["results"])
         if d.get("endOfRecords") or not d["results"]:
             return out
+
+
+HESSEN_JSON = "https://www.hlnug.de/fileadmin/dokumente/naturschutz/Arten_melden/Hornisse/hornisse.json"
+
+
+def hole_hessen():
+    """Funde des HLNUG (Hessen): Datum, Nest/Individuum, Prüfstatus."""
+    out = []
+    for i, h in enumerate(hole_json(HESSEN_JSON)):
+        f = dict(z.split(":", 1) for z in h.get("description", "").split("\n") if ":" in z)
+        f = {k.strip(): v.strip() for k, v in f.items()}
+        try:
+            tag = dt.datetime.strptime(f.get("Datum", ""), "%d.%m.%Y").date()
+        except ValueError:
+            continue
+        out.append({"lat": h["lat"], "lon": h["lng"], "d": tag.isoformat(),
+                    "nest": f.get("Einheit") == "Nest", "status": f.get("Status")})
+    return out
+
+
+def baue_deutschland(heute, nester, einzel, gbif_de):
+    """Eine Datei für die Deutschland-Ansicht: LANUK + Hessen + GBIF (Deutschland), ohne Doppelungen.
+    Zeilen: [lat, lon, datum, quelle, typ(N=Nest, E=Einzeltier/Sichtung), land, id]"""
+    quellen, laender = [], []
+    idx = lambda liste, x: liste.index(x) if x in liste else (liste.append(x) or len(liste) - 1)
+    zeilen, raster = [], defaultdict(list)
+
+    def neu(lat, lon, d, quelle, typ, land, id_, pruefen):
+        tag = dt.date.fromisoformat(d)
+        ky, kx = int(lat * 200), int(lon * 200)
+        if pruefen:  # gleiche Beobachtung schon aus einer Behördenquelle? (≤ 50 m, ±3 Tage)
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    for (la, lo, t) in raster.get((ky + dy, kx + dx), ()):
+                        if abs((t - tag).days) <= 3 and abstand_m(lat, lon, la, lo) <= 50:
+                            return False
+        raster[(ky, kx)].append((lat, lon, tag))
+        zeilen.append([round(lat, 4), round(lon, 4), d, idx(quellen, quelle), typ, idx(laender, land or "unbekannt"), id_])
+        return True
+
+    for n in nester:
+        neu(n["lat"], n["lon"], n["d"], "LANUK NRW", "N" if n["kat"] == "nest" else "E", "Nordrhein-Westfalen", n["id"], False)
+    for e in einzel:
+        neu(e["lat"], e["lon"], e["d"], "LANUK NRW", "E", "Nordrhein-Westfalen", e["id"], False)
+    for h in hole_hessen():
+        neu(h["lat"], h["lon"], h["d"], "HLNUG Hessen", "N" if h["nest"] else "E", "Hessen", None, False)
+    doppelt = 0
+    for g in gbif_de:
+        if not neu(g["lat"], g["lon"], g["d"], g["q"], "E", g["land"], g["id"], True):
+            doppelt += 1
+    print(f"Deutschland: {len(zeilen)} Funde, {doppelt} GBIF-Doppelungen entfernt")
+    return {"quellen": quellen, "laender": laender, "zeilen": zeilen}
 
 
 def naechstes_nest(raster, saison, lat, lon):
@@ -417,9 +486,11 @@ def main():
         })
 
     # GBIF: bei Fehler den letzten Stand behalten, LANUK-Aktualisierung nicht gefährden
-    gbif = None
+    gbif, gbif_de, anzahl_de = None, None, vorher.get("anzahl", {}).get("deutschland")
     try:
-        gbif = hole_gbif(heute)
+        # Einmal für ganz Deutschland abfragen, NRW daraus ableiten (GBIF ist zeitweise langsam)
+        gbif_de = hole_gbif(heute, {"country": "DE"})
+        gbif = [dict(g) for g in gbif_de if g["land"] == "Nordrhein-Westfalen"]
         alt = vorher.get("anzahl", {}).get("gbif")
         if alt and len(gbif) < alt * (1 - MAX_SCHWUND):
             print(f"WARNUNG: GBIF liefert {len(gbif)} statt {alt} – behalte alten Stand.")
@@ -445,11 +516,24 @@ def main():
     schreibe(OUT / "einzeltiere.json", einzel)
     if gbif is not None:
         schreibe(OUT / "gbif.json", gbif)
+    try:
+        if gbif_de is None:
+            raise RuntimeError("keine GBIF-Daten")
+        de = baue_deutschland(heute, nester, einzel, gbif_de)
+        alt = vorher.get("anzahl", {}).get("deutschland")
+        if alt and len(de["zeilen"]) < alt * (1 - MAX_SCHWUND):
+            print(f"WARNUNG: Deutschland {len(de['zeilen'])} statt {alt} Funde – behalte alten Stand.")
+        else:
+            schreibe(OUT / "deutschland.json", de)
+            anzahl_de = len(de["zeilen"])
+    except Exception as e:
+        print("WARNUNG: Deutschland-Daten nicht aktualisiert:", e)
     STATE.write_text(json.dumps(state, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     meta = {
         "stand": dt.datetime.now(TZ).isoformat(timespec="minutes"),
         "anzahl": {"nester": len(roh_n), "einzeltiere": len(roh_e), "gesamt": len(roh_g),
-                   "gbif": len(gbif) if gbif is not None else vorher.get("anzahl", {}).get("gbif")},
+                   "gbif": len(gbif) if gbif is not None else vorher.get("anzahl", {}).get("gbif"),
+                   "deutschland": anzahl_de},
         "saison_start_monat": SAISON_START_MONAT,
         "sekundaer_ab_monat": SEKUNDAER_AB_MONAT,
         "quelle": f"{BASE} (LANUK NRW)",
