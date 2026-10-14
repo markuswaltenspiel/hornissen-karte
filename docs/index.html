@@ -83,6 +83,8 @@ svg .grid { stroke: var(--border); stroke-width: 1; }
 .leaflet-tile-pane { filter: saturate(.35) brightness(1.04); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) saturate(.3) brightness(.85); } }
 .leaflet-popup-content { font-size: 13px; line-height: 1.5; }
+.fotos { display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0 4px; align-items: center; }
+.fotos img { width: 64px; height: 64px; object-fit: cover; border-radius: 4px; display: block; }
 .leaflet-popup-content table { border: 0; font-size: 12px; }
 .leaflet-popup-content td { padding: 1px 6px 1px 0; border: 0; text-align: left; white-space: normal; }
 .leaflet-popup-content td:first-child { color: #52514e; white-space: nowrap; }
@@ -122,11 +124,13 @@ svg .grid { stroke: var(--border); stroke-width: 1; }
       <label><input type="checkbox" class="f-typ" value="U" checked><span class="dot" style="background:var(--unklar)"></span>unklar<span class="n" data-n="U"></span></label>
       <label><input type="checkbox" class="f-typ" value="K" checked><span class="dot" style="background:var(--koenigin)"></span>Königin (ohne Nestangabe)<span class="n" data-n="K"></span></label>
       <label><input type="checkbox" id="f-nurgesichert"> Einordnung nur nach Meldedatum als „unklar“ zeigen</label>
-      <p class="hint">Blass gefüllt = nur nach Meldedatum eingeordnet.</p>
+      <p class="hint">Blass gefüllt: nur über den Fundmonat eingeordnet (Regeln 5–8), also weniger sicher. Kräftig: über Freitext oder Tierzahl eingeordnet (Regeln 1–4).</p>
 
       <h2>Status</h2>
       <label><input type="checkbox" class="f-ent" value="aktiv" checked><span class="dot" style="background:var(--text-2)"></span>nicht als entfernt gemeldet<span class="n" data-n="aktiv"></span></label>
-      <label><input type="checkbox" class="f-ent" value="entfernt" checked><span class="dot ring" style="border-color:var(--text-2)"></span>entfernt<span class="n" data-n="entfernt"></span></label>
+      <label><input type="checkbox" class="f-ent" value="entfernt" checked><span class="dot ring" style="border-color:var(--text-2)"></span>entfernt, Datum bekannt<span class="n" data-n="entfernt"></span></label>
+      <label><input type="checkbox" class="f-ent" value="entfernt_unb" checked><span class="dot ring" style="border-color:var(--text-2);border-style:dashed"></span>entfernt, Zeitpunkt unbekannt<span class="n" data-n="entfernt_unb"></span></label>
+      <p class="hint">Gestrichelt: Die Meldung sagt „entfernt“, aber nicht wann. Diese Nester sind beim Abspielen von Anfang an gestrichelt. Mit Datum bekannt: gefüllt bis zur Entfernung, danach Ring. Ab jetzt merkt sich der tägliche Abruf, wann eine Meldung auf „entfernt“ wechselt.</p>
 
       <h2>Einzeltiere</h2>
       <label><input type="checkbox" id="f-einzel"><span class="dot" style="background:var(--einzel);width:7px;height:7px"></span>ohne bekanntes Nest im Umkreis<span class="n" data-n="E"></span></label>
@@ -144,6 +148,7 @@ svg .grid { stroke: var(--border); stroke-width: 1; }
           <option value="3" selected>3 Tage/Schritt</option>
           <option value="7">1 Woche/Schritt</option>
         </select>
+        <select id="sprung" title="Zu einem Datum springen"></select>
         <button id="zeit-ende" title="Zum heutigen Stand">⏭</button>
       </div>
     </div>

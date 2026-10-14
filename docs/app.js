@@ -27,6 +27,14 @@ const STUFE = { g: "gesichert (Regeln 1–4)", d: "nach Meldedatum", u: "unklar"
 const ENT_NAME = { feld: "ja (Meldefeld „beseitigt“)", text: "ja (laut Freitext)", nein: "nein (Meldefeld)", "?": "keine Angabe" };
 const IND_ORDER = ["1 Ind.", "2-5 Ind.", "6-10 Ind.", "11-20 Ind.", "21-50 Ind.", "51-100 Ind.", "> 100 Ind.", "> 1000 Ind.", "> 10000 Ind."];
 
+const ARCGIS = "https://www.arcgishostedserver.nrw.de/arcgis/rest/services/Hosted";
+const LANUK_APP = "https://www.giscloud.nrw.de/arcgis/apps/experiencebuilder/experience/?id=7a04965288004e779cecfe3f5a805425&data_id=";
+const QUELLE = {
+  nest: { layer: "Sicht_Vespa_velutina", ds: "dataSource_5-19e64cf540b-layer-8" },
+  einzel: { layer: "Sicht_Vespa_velutina_Einzeltiere", ds: "dataSource_5-19e64cf4e60-layer-7" },
+};
+const istEnt = (n) => n.ent === "feld" || n.ent === "text";
+
 let farben = {};
 function leseFarben() {
   const cs = getComputedStyle(document.documentElement);
@@ -45,7 +53,7 @@ function saisonZu(t, kat) {
 
 const zustand = {
   saisons: new Set(), vorjahr: true, typen: new Set(["P", "S", "U", "K"]), nurGesichert: false,
-  ent: new Set(["aktiv", "entfernt"]), unfrei: false, einzel: false, radius: 2000,
+  ent: new Set(["aktiv", "entfernt", "entfernt_unb"]), unfrei: false, einzel: false, radius: 2000,
   T: 0, zeitAktiv: false,
 };
 
@@ -63,17 +71,25 @@ function neueKarte(id) {
   return m;
 }
 
-function stilNest(n, kat, entfernt, neu, blass) {
+// status: "aktiv" | "entfernt" (Datum bekannt) | "entfernt_unb" (Zeitpunkt unbekannt)
+function stilNest(n, kat, status, neu, blass) {
   const c = farben[kat];
   const r = (kat === "K" ? 4 : 5.5) + (neu ? 3 : 0);
-  if (entfernt) return { radius: r, color: c, weight: 2.5, opacity: 1, fillColor: c, fillOpacity: 0 };
-  return { radius: r, color: farben.surface, weight: 1, opacity: 1, fillColor: c, fillOpacity: blass ? 0.45 : 0.92 };
+  if (status === "entfernt") return { radius: r, color: c, weight: 2.5, opacity: 1, dashArray: null, fillColor: c, fillOpacity: 0 };
+  if (status === "entfernt_unb") return { radius: r, color: c, weight: 2, opacity: 1, dashArray: "2 3", fillColor: c, fillOpacity: 0 };
+  return { radius: r, color: farben.surface, weight: 1, opacity: 1, dashArray: null, fillColor: c, fillOpacity: blass ? 0.45 : 0.92 };
+}
+function statusZu(n, T) {
+  if (!istEnt(n)) return "aktiv";
+  if (n.te == null) return "entfernt_unb";
+  return n.te <= T ? "entfernt" : "aktiv";
 }
 
 function popupNest(n) {
   const regel = n.regel ? REGEL[n.regel] : null;
-  const ent = n.ent === "feld" || n.ent === "text";
-  const entDatum = n.entd ? `${fmtIso(n.entd)} (${n.entq === "text" ? "aus Freitext" : "erstmals so gesehen"})` : (ent ? "unbekannt" : "–");
+  const ent = istEnt(n);
+  const QT = { text: "aus Freitext", meldung: "war bei der Meldung schon entfernt", beob: "spätestens; an diesem Tag erstmals als entfernt gesehen" };
+  const entDatum = n.entd ? `${fmtIso(n.entd)} (${QT[n.entq] || ""})` : "unbekannt";
   return `<b>${KAT_NAME[n.kat2]}</b>${regel ? `<br><span style="color:#52514e">${esc(regel[0])} · ${STUFE[n.stufe]}</span>` : ""}
   <table>
   <tr><td>Fund</td><td>${fmtIso(n.d)}</td></tr>
@@ -84,7 +100,32 @@ function popupNest(n) {
   ${ent ? `<tr><td>Entfernt am</td><td>${entDatum}</td></tr>` : ""}
   <tr><td>Freigabe</td><td>${{ ja: "freigegeben", offen: "noch nicht bewertet", nein: "nicht freigegeben" }[n.frei]}</td></tr>
   <tr><td>Ort</td><td>${esc(n.gem || "")}${n.kreis && n.kreis !== n.gem ? ", " + esc(n.kreis) : ""}</td></tr>
-  <tr><td>ID</td><td>${n.id}</td></tr></table>`;
+  </table>${quelleLinks("nest", n.id)}`;
+}
+
+function quelleLinks(art, id) {
+  const fertig = fotoCache.get(art + id);
+  return `<div class="fotos" data-art="${art}" data-id="${id}"${fertig != null ? ' data-geladen="1"' : ""}>${fertig ?? '<span style="color:#7a7974;font-size:12px">Fotos werden geladen …</span>'}</div>
+  <a href="${LANUK_APP}${QUELLE[art].ds}:${id}" target="_blank" rel="noopener">In der LANUK-Karte öffnen ↗</a><br><span style="color:#7a7974;font-size:11px">mit Bemerkung und Fotos · ID ${id}</span>`;
+}
+
+const fotoCache = new Map();
+// Fotos beim Öffnen des Detailfelds direkt beim LANUK abfragen (nichts wird kopiert)
+async function ladeFotos(popup) {
+  const el = popup.getElement()?.querySelector(".fotos");
+  if (!el || el.dataset.geladen) return;
+  el.dataset.geladen = "1";
+  const { layer } = QUELLE[el.dataset.art], id = el.dataset.id, key = el.dataset.art + id;
+  const setze = (html) => { fotoCache.set(key, html); popup.update(); };
+  try {
+    const r = await fetch(`${ARCGIS}/${layer}/FeatureServer/0/queryAttachments?objectIds=${id}&f=json`).then((x) => x.json());
+    const infos = (r.attachmentGroups?.[0]?.attachmentInfos || []).filter((a) => (a.content_type || a.contentType || "").startsWith("image/"));
+    if (!infos.length) return setze(`<span style="color:#7a7974;font-size:12px">Keine Fotos</span>`);
+    setze(infos.slice(0, 6).map((a) => {
+      const url = `${ARCGIS}/${layer}/FeatureServer/0/${id}/attachments/${a.attachmentid ?? a.id}`;
+      return `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Foto" loading="lazy"></a>`;
+    }).join("") + (infos.length > 6 ? `<span style="font-size:12px">+${infos.length - 6}</span>` : ""));
+  } catch { setze(`<span style="color:#7a7974;font-size:12px">Fotos nicht abrufbar</span>`); }
 }
 
 function popupEinzel(e) {
@@ -92,26 +133,27 @@ function popupEinzel(e) {
   <tr><td>Fund</td><td>${fmtIso(e.d)}</td></tr>
   <tr><td>Nächstes Nest</td><td>${e.dn == null ? "über 10 km" : (e.dn / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " km"}</td></tr>
   <tr><td>Freigabe</td><td>${{ ja: "freigegeben", offen: "noch nicht bewertet", nein: "nicht freigegeben" }[e.frei]}</td></tr>
-  <tr><td>ID</td><td>${e.id}</td></tr></table>`;
+  </table>${quelleLinks("einzel", e.id)}`;
 }
 
 function zeichneKarte() {
   const T = zustand.zeitAktiv ? zustand.T : HEUTE;
-  const zaehl = { P: 0, S: 0, U: 0, K: 0, aktiv: 0, entfernt: 0, E: 0 };
+  const zaehl = { P: 0, S: 0, U: 0, K: 0, aktiv: 0, entfernt: 0, entfernt_unb: 0, E: 0 };
   for (const n of NESTER) {
     let sichtbar = freiOk(n) && zustand.saisons.has(n.saison) && n.t <= T;
     const kat = anzeigeKat(n);
-    const entfernt = n.te != null && n.te <= T;
+    const status = statusZu(n, T);
     if (sichtbar && zustand.vorjahr && n.saison < saisonZu(T, n.kat2)) sichtbar = false;
-    if (sichtbar) { zaehl[kat]++; zaehl[entfernt ? "entfernt" : "aktiv"]++; }
-    if (sichtbar && (!zustand.typen.has(kat) || !zustand.ent.has(entfernt ? "entfernt" : "aktiv"))) sichtbar = false;
+    if (sichtbar) { zaehl[kat]++; zaehl[status]++; }
+    if (sichtbar && (!zustand.typen.has(kat) || !zustand.ent.has(status))) sichtbar = false;
     if (sichtbar) {
       const neu = zustand.zeitAktiv && T - n.t < 7;
-      const schluessel = kat + entfernt + neu + (n.stufe === "d" && !zustand.nurGesichert);
+      const blass = n.stufe === "d" && !zustand.nurGesichert;
+      const schluessel = kat + status + neu + blass;
       if (!n.marker) {
-        n.marker = L.circleMarker([n.lat, n.lon], { renderer }).bindPopup(() => popupNest(n));
+        n.marker = L.circleMarker([n.lat, n.lon], { renderer }).bindPopup(() => popupNest(n), { maxWidth: 320 });
       }
-      if (n.schluessel !== schluessel) { n.marker.setStyle(stilNest(n, kat, entfernt, neu, n.stufe === "d" && !zustand.nurGesichert)); n.marker.setRadius(stilNest(n, kat, entfernt, neu).radius); n.schluessel = schluessel; }
+      if (n.schluessel !== schluessel) { const st = stilNest(n, kat, status, neu, blass); n.marker.setStyle(st); n.marker.setRadius(st.radius); n.schluessel = schluessel; }
       if (!n.an) { n.marker.addTo(karte); n.an = true; }
     } else if (n.an) { n.marker.remove(); n.an = false; }
   }
@@ -121,7 +163,7 @@ function zeichneKarte() {
     if (sichtbar && zustand.vorjahr && e.saison < ausIdx(T).getUTCFullYear()) sichtbar = false;
     if (sichtbar) {
       zaehl.E++;
-      if (!e.marker) e.marker = L.circleMarker([e.lat, e.lon], { renderer, radius: 3, stroke: false, fillColor: farben.einzel, fillOpacity: 0.85 }).bindPopup(() => popupEinzel(e));
+      if (!e.marker) e.marker = L.circleMarker([e.lat, e.lon], { renderer, radius: 3, stroke: false, fillColor: farben.einzel, fillOpacity: 0.85 }).bindPopup(() => popupEinzel(e), { maxWidth: 320 });
       if (!e.an) { e.marker.addTo(karte); e.an = true; }
     } else if (e.an) { e.marker.remove(); e.an = false; }
   }
@@ -144,11 +186,16 @@ function setzeZeit(T) {
   $("#zeit").value = zustand.T;
   zeichneKarte();
 }
+function springe(wert) {
+  stop();
+  if (wert === "") return setzeZeit(HEUTE);
+  setzeZeit(Math.max(+wert, +$("#zeit").min));
+}
 function stop() { clearInterval(timer); timer = null; $("#play").textContent = "▶"; }
 function play() {
   if (timer) return stop();
   const z = $("#zeit");
-  if (+z.value >= HEUTE) { zustand.zeitAktiv = true; zustand.T = +z.min; }
+  if (+z.value >= HEUTE) { zustand.zeitAktiv = true; zustand.T = $("#sprung").value === "" ? +z.min : Math.max(+$("#sprung").value, +z.min); }
   zustand.zeitAktiv = true;
   $("#play").textContent = "⏸";
   timer = setInterval(() => {
@@ -169,7 +216,7 @@ function zeichneVergleich() {
     for (const n of NESTER) {
       if (n.saison !== s || n.kat2 === "K" || !freiOk(n)) continue;
       const kat = anzeigeKat(n);
-      L.circleMarker([n.lat, n.lon], { renderer: map._r, ...stilNest(n, kat, n.te != null, false, n.stufe === "d" && !zustand.nurGesichert) }).bindPopup(() => popupNest(n)).addTo(g);
+      L.circleMarker([n.lat, n.lon], { renderer: map._r, ...stilNest(n, kat, statusZu(n, HEUTE), false, n.stufe === "d" && !zustand.nurGesichert) }).bindPopup(() => popupNest(n), { maxWidth: 320 }).addTo(g);
       anz++;
     }
     g.addTo(map); map._gruppe = g;
@@ -181,7 +228,7 @@ function zeichneVergleich() {
     const k = n.kreis || "unbekannt";
     if (!kreise.has(k)) kreise.set(k, [0, 0, 0, 0]);
     const z = kreise.get(k), i = n.saison === a ? 0 : 2;
-    z[i]++; if (n.te != null) z[i + 1]++;
+    z[i]++; if (istEnt(n)) z[i + 1]++;
   }
   const zeilen = [...kreise].map(([k, z]) => [k, z[0], z[1], z[2], z[3], z[2] - z[0]]);
   const sp = vglSort.spalte;
@@ -201,6 +248,10 @@ function initVergleich() {
   let sperre = false;
   const sync = (von, zu) => von.on("move", () => { if (sperre) return; sperre = true; zu.setView(von.getCenter(), von.getZoom(), { animate: false }); sperre = false; });
   sync(mapA, mapB); sync(mapB, mapA);
+  for (const m of [mapA, mapB]) m.on("popupopen", (ev) => ladeFotos(ev.popup));
+  const leg = (c, t, extra = "") => `<span><span class="dot ${extra}" style="${extra ? "border-color" : "background"}:var(--${c})${extra === "ring dash" ? ";border-style:dashed" : ""}"></span>${t}</span>`;
+  $("#vgl-legende").innerHTML = leg("primaer", "Primärnest") + leg("sekundaer", "Sekundärnest") + leg("unklar", "unklar")
+    + leg("text-2", "entfernt, Datum bekannt", "ring") + leg("text-2", "entfernt, Zeitpunkt unbekannt", "ring dash") + `<span style="color:var(--muted)">blass = nur nach Fundmonat eingeordnet</span>`;
   zeichneVergleich();
 }
 
@@ -218,7 +269,7 @@ function statistik() {
     ["Sekundärnest, nach Meldedatum", proSaison((n) => n.kat2 === "S" && n.stufe === "d"), "sub"],
     ["unklar", proSaison((n) => n.kat2 === "U"), "sub"],
     ["Königin ohne Nestangabe", proSaison((n) => n.kat2 === "K")],
-    ["Nester als entfernt gemeldet", proSaison((n) => nest(n) && n.te != null), "fett"],
+    ["Nester als entfernt gemeldet", proSaison((n) => nest(n) && istEnt(n)), "fett"],
     ["über Meldefeld „beseitigt“", proSaison((n) => nest(n) && n.ent === "feld"), "sub"],
     ["nur laut Freitext", proSaison((n) => nest(n) && n.ent === "text"), "sub"],
     ["Meldefeld „nein“", proSaison((n) => nest(n) && n.ent === "nein"), "sub"],
@@ -359,7 +410,7 @@ async function start() {
   for (const x of NESTER) {
     x.t = tagIdx(x.d);
     x.kat2 = x.kat === "koenigin" ? "K" : x.typ;
-    x.te = (x.ent === "feld" || x.ent === "text") ? (x.entd ? Math.max(tagIdx(x.entd), x.t) : x.t) : null;
+    x.te = istEnt(x) && x.entd ? Math.max(tagIdx(x.entd), x.t) : null;
   }
   for (const x of EINZEL) x.t = tagIdx(x.d);
   NESTER.sort((a, b) => a.t - b.t);
@@ -384,10 +435,14 @@ async function start() {
   $("#f-radius").oninput = (ev) => { zustand.radius = +ev.target.value; $("#radius-wert").textContent = (zustand.radius / 1000).toLocaleString("de-DE") + " km"; zeichneKarte(); };
   $("#zeit").oninput = (ev) => { stop(); setzeZeit(+ev.target.value); };
   $("#play").onclick = play;
-  $("#zeit-ende").onclick = () => { stop(); setzeZeit(HEUTE); };
+  $("#zeit-ende").onclick = () => { stop(); $("#sprung").value = ""; setzeZeit(HEUTE); };
+  $("#sprung").onchange = (ev) => springe(ev.target.value);
+  karte.on("popupopen", (ev) => ladeFotos(ev.popup));
   $("#vgl-a").onchange = $("#vgl-b").onchange = zeichneVergleich;
   $$("nav.tabs button").forEach((b) => b.onclick = () => zeige(b.dataset.view));
 
+  const jahre = [...new Set(NESTER.map((x) => +x.d.slice(0, 4)))].sort();
+  $("#sprung").innerHTML = `<option value="">Abspielen ab …</option>` + jahre.map((y) => `<option value="${Date.UTC(y, 0, 1) / TAG}">1.1.${y}</option><option value="${Date.UTC(y, 3, 1) / TAG}">1.4.${y}</option>`).join("");
   zeitBereich();
   zeichneKarte();
 }

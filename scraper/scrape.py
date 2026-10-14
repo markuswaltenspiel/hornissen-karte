@@ -217,8 +217,15 @@ def main():
         s = state.get(gid)
         if s is None:
             s = state[gid] = {"erst": heute.isoformat() if vorher else None, "ent": ent}
+            # Neue Meldung, die schon beim ersten Abruf als entfernt markiert ist:
+            # dann war das Nest bei der Meldung bereits weg.
+            meldung = datum(a.get("created_date"))
+            if vorher and ent in ("feld", "text") and meldung and (heute - meldung).days <= 2:
+                s["ent_meldung"] = meldung.isoformat()
         elif s.get("ent") in ("nein", "?") and ent in ("feld", "text"):
             s["ent"], s["ent_beob"] = ent, heute.isoformat()
+        if not ent_datum and s.get("ent_meldung"):
+            ent_datum, ent_quelle = dt.date.fromisoformat(s["ent_meldung"]), "meldung"
         if not ent_datum and s.get("ent_beob"):
             ent_datum, ent_quelle = dt.date.fromisoformat(s["ent_beob"]), "beob"
 
