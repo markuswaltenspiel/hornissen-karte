@@ -38,6 +38,11 @@ SAISON_START_MONAT = 4
 # Abschnitt "Prüfung der Datumsregel".
 SEKUNDAER_AB_MONAT = 8
 
+# Folgemeldung: Eine spätere, als entfernt markierte Meldung höchstens so weit
+# entfernt gilt als Entfernung des früheren Nests (Stichprobe: meist dasselbe Nest).
+PAAR_MAX_M = 20
+PAAR_MAX_TAGE = 120
+
 # Abbruch, wenn eine Quelle plötzlich deutlich weniger Datensätze liefert
 # (z. B. weil der Dienst umgebaut wurde) – lieber laut scheitern als leere Karte.
 MAX_SCHWUND = 0.2
@@ -160,6 +165,36 @@ def abstand_m(lat1, lon1, lat2, lon2):
     return 6371000 * math.hypot(x, math.radians(lat2 - lat1))
 
 
+def verknuepfe_folgemeldungen(nester):
+    """Nest ohne Entfernt-Angabe + spätere Entfernt-Meldung am selben Ort -> vermutlich entfernt."""
+    raster = defaultdict(list)
+    for b in nester:
+        if b["kat"] == "nest" and b["ent"] in ("feld", "text"):
+            raster[(int(b["lat"] * 500), int(b["lon"] * 500))].append(b)  # ~200 m Zellen
+    kandidaten = []
+    for a in nester:
+        if a["kat"] != "nest" or a["ent"] not in ("?", "nein"):
+            continue
+        da = dt.date.fromisoformat(a["d"])
+        ky, kx = int(a["lat"] * 500), int(a["lon"] * 500)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                for b in raster.get((ky + dy, kx + dx), ()):
+                    tage = (dt.date.fromisoformat(b["d"]) - da).days
+                    if b["saison"] != a["saison"] or not 0 <= tage <= PAAR_MAX_TAGE:
+                        continue
+                    m = abstand_m(a["lat"], a["lon"], b["lat"], b["lon"])
+                    if m <= PAAR_MAX_M:
+                        kandidaten.append((m, tage, a, b))
+    vergeben = set()
+    for m, tage, a, b in sorted(kandidaten, key=lambda k: (k[0], k[1])):
+        if a["id"] in vergeben or b["id"] in vergeben:
+            continue
+        vergeben |= {a["id"], b["id"]}
+        datum_b = max(b["entd"] or b["d"], a["d"])
+        a.update(ent="paar", entd=datum_b, entq="paar", paar=b["id"], paar_m=round(m))
+
+
 def pruefe_schwund(name, anzahl, vorher):
     alt = vorher.get("anzahl", {}).get(name)
     if alt and anzahl < alt * (1 - MAX_SCHWUND):
@@ -244,6 +279,8 @@ def main():
             "kreis": a.get("kreis"), "gem": a.get("gemeinde"),
         })
 
+    verknuepfe_folgemeldungen(nester)
+
     # Einzeltiere mit Abstand zum nächsten bekannten Nest derselben Saison
     raster = defaultdict(list)
     for n in nester:
@@ -288,7 +325,7 @@ def main():
     print(f"Nester: {len(nester)}, Einzeltiere: {len(einzel)}")
     for k, v in sorted(c.items(), key=lambda x: -x[1]):
         print("  ", k, v)
-    print("Entfernt:", Counter(n["ent"] for n in nester))
+    print("Entfernt:", Counter(n["ent"] for n in nester if n["kat"] == "nest"))
 
 
 def schreibe(pfad, daten, kompakt=True):

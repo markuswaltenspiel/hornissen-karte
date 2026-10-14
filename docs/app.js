@@ -24,7 +24,7 @@ const REGEL = {
   rest: ["Juli bis Stichmonat, Schätzung ≤ 100 oder fehlt → unklar", "u"],
 };
 const STUFE = { g: "gesichert (Regeln 1–4)", d: "nach Meldedatum", u: "unklar" };
-const ENT_NAME = { feld: "ja (Meldefeld „beseitigt“)", text: "ja (laut Freitext)", nein: "nein (Meldefeld)", "?": "keine Angabe" };
+const ENT_NAME = { feld: "ja (Meldefeld „beseitigt“)", text: "ja (laut Freitext)", paar: "vermutlich (spätere Entfernt-Meldung am selben Ort)", nein: "nein (Meldefeld)", "?": "keine Angabe" };
 const IND_ORDER = ["1 Ind.", "2-5 Ind.", "6-10 Ind.", "11-20 Ind.", "21-50 Ind.", "51-100 Ind.", "> 100 Ind.", "> 1000 Ind.", "> 10000 Ind."];
 
 const ARCGIS = "https://www.arcgishostedserver.nrw.de/arcgis/rest/services/Hosted";
@@ -33,7 +33,7 @@ const QUELLE = {
   nest: { layer: "Sicht_Vespa_velutina", ds: "dataSource_5-19e64cf540b-layer-8" },
   einzel: { layer: "Sicht_Vespa_velutina_Einzeltiere", ds: "dataSource_5-19e64cf4e60-layer-7" },
 };
-const istEnt = (n) => n.ent === "feld" || n.ent === "text";
+const istEnt = (n) => n.ent === "feld" || n.ent === "text" || n.ent === "paar";
 
 let farben = {};
 function leseFarben() {
@@ -77,7 +77,9 @@ function stilNest(n, kat, status, neu, blass) {
   const r = (kat === "K" ? 4 : 5.5) + (neu ? 3 : 0);
   if (status === "entfernt") return { radius: r, color: c, weight: 2.5, opacity: 1, dashArray: null, fillColor: c, fillOpacity: 0 };
   if (status === "entfernt_unb") return { radius: r, color: c, weight: 2, opacity: 1, dashArray: "2 3", fillColor: c, fillOpacity: 0 };
-  return { radius: r, color: farben.surface, weight: 1, opacity: 1, dashArray: null, fillColor: c, fillOpacity: blass ? 0.45 : 0.92 };
+  // Nur über den Fundmonat eingeordnet: Kontur in der eigenen Farbe, etwas hellere Füllung
+  if (blass) return { radius: r, color: c, weight: 1.5, opacity: 1, dashArray: null, fillColor: c, fillOpacity: 0.65 };
+  return { radius: r, color: farben.surface, weight: 1, opacity: 1, dashArray: null, fillColor: c, fillOpacity: 0.95 };
 }
 function statusZu(n, T) {
   if (!istEnt(n)) return "aktiv";
@@ -88,7 +90,7 @@ function statusZu(n, T) {
 function popupNest(n) {
   const regel = n.regel ? REGEL[n.regel] : null;
   const ent = istEnt(n);
-  const QT = { text: "aus Freitext", meldung: "war bei der Meldung schon entfernt", beob: "spätestens; an diesem Tag erstmals als entfernt gesehen" };
+  const QT = { text: "aus Freitext", meldung: "war bei der Meldung schon entfernt", beob: "spätestens; an diesem Tag erstmals als entfernt gesehen", paar: "Funddatum der Folgemeldung" };
   const entDatum = n.entd ? `${fmtIso(n.entd)} (${QT[n.entq] || ""})` : "unbekannt";
   return `<b>${KAT_NAME[n.kat2]}</b>${regel ? `<br><span style="color:#52514e">${esc(regel[0])} · ${STUFE[n.stufe]}</span>` : ""}
   <table>
@@ -98,6 +100,7 @@ function popupNest(n) {
   <tr><td>Tiere (Schätzung)</td><td>${esc(n.ind || "keine Angabe")}</td></tr>
   <tr><td>Entfernt</td><td>${ENT_NAME[n.ent]}</td></tr>
   ${ent ? `<tr><td>Entfernt am</td><td>${entDatum}</td></tr>` : ""}
+  ${n.paar ? `<tr><td>Folgemeldung</td><td><a href="${LANUK_APP}${QUELLE.nest.ds}:${n.paar}" target="_blank" rel="noopener">ID ${n.paar}</a>, ${n.paar_m} m entfernt</td></tr>` : ""}
   <tr><td>Freigabe</td><td>${{ ja: "freigegeben", offen: "noch nicht bewertet", nein: "nicht freigegeben" }[n.frei]}</td></tr>
   <tr><td>Ort</td><td>${esc(n.gem || "")}${n.kreis && n.kreis !== n.gem ? ", " + esc(n.kreis) : ""}</td></tr>
   </table>${quelleLinks("nest", n.id)}`;
@@ -251,7 +254,7 @@ function initVergleich() {
   for (const m of [mapA, mapB]) m.on("popupopen", (ev) => ladeFotos(ev.popup));
   const leg = (c, t, extra = "") => `<span><span class="dot ${extra}" style="${extra ? "border-color" : "background"}:var(--${c})${extra === "ring dash" ? ";border-style:dashed" : ""}"></span>${t}</span>`;
   $("#vgl-legende").innerHTML = leg("primaer", "Primärnest") + leg("sekundaer", "Sekundärnest") + leg("unklar", "unklar")
-    + leg("text-2", "entfernt, Datum bekannt", "ring") + leg("text-2", "entfernt, Zeitpunkt unbekannt", "ring dash") + `<span style="color:var(--muted)">blass = nur nach Fundmonat eingeordnet</span>`;
+    + leg("text-2", "entfernt, Datum bekannt", "ring") + leg("text-2", "entfernt, Zeitpunkt unbekannt", "ring dash") + `<span style="color:var(--muted)">heller mit Kontur = nur nach Fundmonat eingeordnet</span>`;
   zeichneVergleich();
 }
 
@@ -272,6 +275,7 @@ function statistik() {
     ["Nester als entfernt gemeldet", proSaison((n) => nest(n) && istEnt(n)), "fett"],
     ["über Meldefeld „beseitigt“", proSaison((n) => nest(n) && n.ent === "feld"), "sub"],
     ["nur laut Freitext", proSaison((n) => nest(n) && n.ent === "text"), "sub"],
+    ["vermutlich, über Folgemeldung am selben Ort", proSaison((n) => nest(n) && n.ent === "paar"), "sub"],
     ["Meldefeld „nein“", proSaison((n) => nest(n) && n.ent === "nein"), "sub"],
     ["keine Angabe", proSaison((n) => nest(n) && n.ent === "?"), "sub"],
     ["Einzeltiere", saisons.map((s) => E.filter((e) => e.saison === s).length), "fett"],
@@ -279,7 +283,7 @@ function statistik() {
   ];
   const nestSumme = proSaison(nest);
   const tab1 = `<table><thead><tr><th>Saison</th>${saisons.map((s) => `<th>${s}</th>`).join("")}</tr></thead><tbody>${reihen.map(([t, w, art], i) => {
-    const anteil = i >= 1 && i <= 5 || i >= 7 && i <= 11;
+    const anteil = i >= 1 && i <= 5 || i >= 7 && i <= 12;
     return `<tr class="${art === "sub" ? "sub" : ""}" style="${art === "fett" ? "font-weight:600" : ""}"><td>${t}</td>${w.map((v, j) => `<td>${zahl(v)}${anteil ? ` <span style="color:var(--muted)">${pct(v, nestSumme[j])}</span>` : ""}</td>`).join("")}</tr>`;
   }).join("")}</tbody></table>`;
 
@@ -311,7 +315,7 @@ function statistik() {
     <p class="erkl">Eine Saison umfasst Primärnester und Königinnen eines Kalenderjahres sowie die übrigen Nester bis Ende März des Folgejahres. „Gesichert“ heißt: eingeordnet über Freitext oder Tierzahl (Regeln 1–4). „Nach Meldedatum“: nur über den Fundmonat. Prozentwerte beziehen sich auf die Nesteinträge der Saison.</p>
     <div class="tabwrap">${tab1}</div>
     <h3>Nester je Fundmonat</h3>
-    <div class="legende"><span><span class="dot" style="background:var(--primaer)"></span>Primärnest</span><span><span class="dot" style="background:var(--sekundaer)"></span>Sekundärnest</span><span><span class="dot" style="background:var(--unklar)"></span>unklar</span><span style="color:var(--muted)">blass = nach Meldedatum eingeordnet</span></div>
+    <div class="legende"><span><span class="dot" style="background:var(--primaer)"></span>Primärnest</span><span><span class="dot" style="background:var(--sekundaer)"></span>Sekundärnest</span><span><span class="dot" style="background:var(--unklar)"></span>unklar</span><span style="color:var(--muted)">heller = nur nach Fundmonat eingeordnet</span></div>
     <div class="multiples" id="multiples"></div>
     <h3>Wie die Nester eingeordnet wurden</h3>
     <p class="erkl">Die Regeln greifen in dieser Reihenfolge; die erste passende gilt.</p>
