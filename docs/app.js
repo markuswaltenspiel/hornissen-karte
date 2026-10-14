@@ -38,7 +38,7 @@ const istEnt = (n) => n.ent === "feld" || n.ent === "text";
 let farben = {};
 function leseFarben() {
   const cs = getComputedStyle(document.documentElement);
-  for (const k of ["primaer", "sekundaer", "koenigin", "unklar", "einzel", "surface", "text-2"]) farben[k] = cs.getPropertyValue("--" + k).trim();
+  for (const k of ["primaer", "sekundaer", "koenigin", "unklar", "einzel", "einzelchart", "entfernt", "offen", "surface", "text-2"]) farben[k] = cs.getPropertyValue("--" + k).trim();
   farben.P = farben.primaer; farben.S = farben.sekundaer; farben.K = farben.koenigin; farben.U = farben.unklar;
 }
 
@@ -317,9 +317,24 @@ function statistik() {
     <h3>Übersicht nach Saison</h3>
     <p class="erkl">Doppelmeldungen sind herausgerechnet: Meldungen höchstens 20 m und 120 Tage nach der ersten Meldung eines Nests derselben Saison zählen als dasselbe Nest. Eine Saison umfasst Primärnester und Königinnen eines Kalenderjahres sowie die übrigen Nester bis Ende März des Folgejahres. „Gesichert“ heißt: eingeordnet über Freitext oder Tierzahl (Regeln 1–4). „Nach Meldedatum“: nur über den Fundmonat. Prozentwerte beziehen sich auf die Nesteinträge der Saison.</p>
     <div class="tabwrap">${tab1}</div>
+    <h3>Alle Funde im Zeitverlauf</h3>
+    <p class="erkl">Nach Funddatum, Kalendermonate. Oben Nester und Königinnen, unten Einzeltiere (eigene Skala).</p>
+    <div class="legende"><span><span class="dot" style="background:var(--primaer)"></span>Primärnest</span><span><span class="dot" style="background:var(--sekundaer)"></span>Sekundärnest</span><span><span class="dot" style="background:var(--unklar)"></span>unklar</span><span><span class="dot" style="background:var(--koenigin)"></span>Königin (ohne Nestangabe)</span></div>
+    <div class="breit" id="gesamt-nester"></div>
+    <div class="legende"><span><span class="dot" style="background:var(--einzelchart)"></span>Einzeltiere</span></div>
+    <div class="breit" id="gesamt-einzel"></div>
     <h3>Nester je Fundmonat</h3>
     <div class="legende"><span><span class="dot" style="background:var(--primaer)"></span>Primärnest</span><span><span class="dot" style="background:var(--sekundaer)"></span>Sekundärnest</span><span><span class="dot" style="background:var(--unklar)"></span>unklar</span><span style="color:var(--muted)">etwas heller = nur nach Fundmonat eingeordnet</span></div>
     <div class="multiples" id="multiples"></div>
+    <h3>Entfernte Nester</h3>
+    <p class="erkl">Für die meisten Entfernungen ist der Zeitpunkt unbekannt. Die Grafiken ordnen entfernte Nester deshalb nach ihrem <b>Fundmonat</b>: „Juli“ heißt also „im Juli gefunden und irgendwann als entfernt gemeldet“. Jüngere Monate holen noch auf, weil Entfernungen oft erst Wochen später eingetragen werden.</p>
+    <div class="legende"><span><span class="dot" style="background:var(--primaer)"></span>Primärnest</span><span><span class="dot" style="background:var(--sekundaer)"></span>Sekundärnest</span><span><span class="dot" style="background:var(--unklar)"></span>unklar</span></div>
+    <div class="multiples" id="entfernt-total"></div>
+    <h3>Gemeldet und entfernt</h3>
+    <div class="legende"><span><span class="dot" style="background:var(--entfernt)"></span>als entfernt gemeldet</span><span><span class="dot" style="background:var(--offen)"></span>nicht als entfernt gemeldet</span>
+      <span style="margin-left:auto" class="umschalter"><label><input type="radio" name="entf-modus" value="abs"${entfProzent ? "" : " checked"}> absolut</label> <label><input type="radio" name="entf-modus" value="pct"${entfProzent ? " checked" : ""}> Anteil in %</label></span></div>
+    <p class="erkl">Die ganze Säule ist die Zahl der in diesem Monat neu gemeldeten Nester, der violette Teil davon wurde als entfernt gemeldet. In der Prozentansicht fehlen Monate mit weniger als 5 Nestern; dort steht nur die Anzahl.</p>
+    <div class="multiples" id="entfernt-anteil"></div>
     <h3>Wie die Nester eingeordnet wurden</h3>
     <p class="erkl">Die Regeln greifen in dieser Reihenfolge; die erste passende gilt.</p>
     <div class="tabwrap">${tab2}</div>
@@ -329,63 +344,149 @@ function statistik() {
     <p class="erkl" style="margin-top:14px">Diese Tabelle ist allerdings zirkulär: Ab Juli gelten als „gesichert“ vor allem große Nester (> 100 Tiere), und die sind fast immer Sekundärnester. Für die Datumsregel zählen die kleinen Nester. Die folgende Tabelle zeigt deshalb nur Nester mit ≤ 100 Tieren oder ohne Schätzung, deren Typ im Freitext steht. Achtung, kleine Stichprobe: Wer „Primärnest“ dazuschreibt, tut das vielleicht gerade bei späten Funden.</p>
     <div class="tabwrap">${tab4}</div>`;
   zeichneMultiples(saisons, nn);
+  zeichneGesamt(N, E);
+  zeichneEntfernt(saisons, nn);
+  zeichneEntferntAnteil(saisons, nn);
+  $$('input[name="entf-modus"]').forEach((r) => r.onchange = () => { entfProzent = r.value === "pct"; zeichneEntferntAnteil(saisons, nn); });
 }
 
-function zeichneMultiples(saisons, nn) {
-  // Monate einer Saison: Jan des Saisonjahres bis März des Folgejahres (15 Balken)
-  const LBL = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D", "J", "F", "M"];
-  const serien = [["P", "g"], ["P", "d"], ["S", "g"], ["S", "d"], ["U", "u"]];
-  const daten = {};
-  let max = 0;
-  for (const s of saisons) {
-    const z = Array.from({ length: 15 }, () => serien.map(() => 0));
-    for (const n of nn) {
-      if (n.saison !== s) continue;
-      const i = (+n.d.slice(0, 4) - s) * 12 + +n.d.slice(5, 7) - 1;
-      if (i < 0 || i > 14) continue;
-      const k = serien.findIndex(([t, st]) => t === n.kat2 && st === n.stufe);
-      if (k >= 0) z[i][k]++;
-    }
-    z.forEach((m) => max = Math.max(max, m.reduce((a, b) => a + b, 0)));
-    daten[s] = z;
-  }
-  const W = 320, H = 150, L0 = 34, B = 20, T0 = 6, bw = (W - L0 - 4) / 15;
-  const y = (v) => H - B - (v / max) * (H - B - T0);
-  const ticks = [0, Math.round(max / 2 / 100) * 100 || Math.round(max / 2), max].filter((v, i, a) => a.indexOf(v) === i);
-  const html = saisons.map((s) => {
+const MON_LANG = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+const MON_KURZ = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
+
+function schoeneSchritte(max) {
+  if (max <= 0) return [0];
+  const roh = max / 3, p = 10 ** Math.floor(Math.log10(roh)), f = roh / p;
+  const schritt = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p, out = [];
+  for (let v = 0; v <= max; v += schritt) out.push(v);
+  return out;
+}
+
+// Gestapelte Säulen, mehrere Felder mit gemeinsamer y-Achse.
+// panels: [{ titel, labels, werte: [[v je Serie] je Balken], trenn, tip(i) }]
+// serien: [{ farbe, deckkraft }]; opt: { W, H, prozent, id }
+function balken(ziel, panels, serien, opt = {}) {
+  const W = opt.W || 320, H = opt.H || 150, L0 = 38, B = 20, T0 = 6;
+  const summe = (m) => m.reduce((a, b) => a + b, 0);
+  const max = opt.prozent ? 100 : Math.max(1, ...panels.flatMap((p) => p.werte.map(summe)));
+  const ticks = opt.prozent ? [0, 50, 100] : schoeneSchritte(max);
+  const top = opt.prozent ? 100 : Math.max(max, ticks.at(-1));
+  const y = (v) => H - B - (v / top) * (H - B - T0);
+  const html = panels.map((p, pi) => {
+    const n = p.labels.length, bw = (W - L0 - 4) / n, luecke = Math.min(3, bw * 0.25);
     let bars = "";
-    daten[s].forEach((m, i) => {
+    p.werte.forEach((m, i) => {
+      const tot = summe(m);
+      if (opt.prozent && tot < (opt.minN || 1)) {
+        if (tot) bars += `<text x="${L0 + i * bw + bw / 2}" y="${H - B - 4}" text-anchor="middle" style="font-size:9px">${tot}</text>`;
+        bars += `<rect class="hit" x="${L0 + i * bw}" y="${T0}" width="${bw}" height="${H - B - T0}" fill="transparent" data-p="${pi}" data-i="${i}"/>`;
+        return;
+      }
       let acc = 0;
-      const x = L0 + i * bw + 1.5, w = bw - 3;
+      const x = L0 + i * bw + luecke / 2, w = bw - luecke;
       m.forEach((v, k) => {
         if (!v) return;
-        const [t, st] = serien[k];
-        const y1 = y(acc + v), y0 = y(acc);
-        const h = Math.max(y0 - y1 - 2, 1);
-        bars += `<rect x="${x}" y="${y1}" width="${w}" height="${h}" rx="${acc === 0 ? 0 : 0}" fill="${farben[t]}" fill-opacity="${st === "d" ? 0.45 : 1}"/>`;
-        acc += v;
+        const wert = opt.prozent ? (100 * v) / tot : v;
+        const y1 = y(acc + wert), y0 = y(acc);
+        const h = Math.max(y0 - y1 - (acc ? 1.5 : 0), 0.8);
+        bars += `<rect x="${x}" y="${y1}" width="${w}" height="${h}" fill="${serien[k].farbe}" fill-opacity="${serien[k].deckkraft ?? 1}"/>`;
+        acc += wert;
       });
-      bars += `<rect class="hit" x="${L0 + i * bw}" y="${T0}" width="${bw}" height="${H - B - T0}" fill="transparent" data-s="${s}" data-i="${i}"/>`;
+      bars += `<rect class="hit" x="${L0 + i * bw}" y="${T0}" width="${bw}" height="${H - B - T0}" fill="transparent" data-p="${pi}" data-i="${i}"/>`;
     });
-    const achse = ticks.map((v) => `<line class="grid" x1="${L0}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text x="${L0 - 4}" y="${y(v) + 4}" text-anchor="end">${zahl(v)}</text>`).join("");
-    const xl = LBL.map((l, i) => `<text x="${L0 + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${l}</text>`).join("");
-    const trenn = `<line class="grid" x1="${L0 + 12 * bw}" x2="${L0 + 12 * bw}" y1="${T0}" y2="${H - B}" stroke-dasharray="3 3"/>`;
-    return `<figure><figcaption>Saison ${s}</figcaption><svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Nester je Fundmonat, Saison ${s}">${achse}${trenn}${bars}${xl}</svg></figure>`;
+    const achse = ticks.map((v) => `<line class="grid" x1="${L0}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text x="${L0 - 4}" y="${y(v) + 4}" text-anchor="end">${zahl(v)}${opt.prozent ? " %" : ""}</text>`).join("");
+    const xl = p.labels.map((l, i) => l ? `<text x="${L0 + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${l}</text>` : "").join("");
+    const trenn = (p.trenn || []).map((t) => `<line class="grid" x1="${L0 + t * bw}" x2="${L0 + t * bw}" y1="${T0}" y2="${H - B}" stroke-dasharray="3 3"/>`).join("");
+    const svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(p.titel || "")}">${achse}${trenn}${bars}${xl}</svg>`;
+    return p.titel ? `<figure><figcaption>${esc(p.titel)}</figcaption>${svg}</figure>` : `<figure>${svg}</figure>`;
   }).join("");
-  $("#multiples").innerHTML = html;
+  const el = $(ziel);
+  el.innerHTML = html;
   const tip = $("#tooltip");
-  const MON = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
-  $$("#multiples .hit").forEach((r) => {
+  el.querySelectorAll(".hit").forEach((r) => {
     r.addEventListener("mousemove", (ev) => {
-      const s = +r.dataset.s, i = +r.dataset.i, m = daten[s][i];
-      const sum = m.reduce((a, b) => a + b, 0);
-      tip.innerHTML = `<b>${MON[i % 12]} ${s + Math.floor(i / 12)}</b> · ${zahl(sum)} Nester<br>Primär: ${zahl(m[0])} gesichert, ${zahl(m[1])} nach Datum<br>Sekundär: ${zahl(m[2])} gesichert, ${zahl(m[3])} nach Datum<br>unklar: ${zahl(m[4])}`;
+      tip.innerHTML = panels[+r.dataset.p].tip(+r.dataset.i);
       tip.style.display = "block";
       tip.style.left = Math.min(ev.clientX + 12, innerWidth - tip.offsetWidth - 8) + "px";
       tip.style.top = ev.clientY + 12 + "px";
     });
     r.addEventListener("mouseleave", () => tip.style.display = "none");
   });
+}
+
+// Monatsindex einer Saison: Jan des Saisonjahres = 0 … März des Folgejahres = 14
+const saisonMonat = (n) => (+n.d.slice(0, 4) - n.saison) * 12 + +n.d.slice(5, 7) - 1;
+const SAISON_LBL = [...MON_KURZ, "J", "F", "M"];
+const monatName = (s, i) => `${MON_LANG[i % 12]} ${s + Math.floor(i / 12)}`;
+
+function zeichneMultiples(saisons, nn) {
+  const serien = [["P", "g"], ["P", "d"], ["S", "g"], ["S", "d"], ["U", "u"]];
+  const panels = saisons.map((s) => {
+    const z = Array.from({ length: 15 }, () => serien.map(() => 0));
+    for (const n of nn) {
+      if (n.saison !== s) continue;
+      const i = saisonMonat(n), k = serien.findIndex(([t, st]) => t === n.kat2 && st === n.stufe);
+      if (i >= 0 && i <= 14 && k >= 0) z[i][k]++;
+    }
+    return { titel: `Saison ${s}`, labels: SAISON_LBL, werte: z, trenn: [12], tip: (i) => {
+      const m = z[i];
+      return `<b>${monatName(s, i)}</b> · ${zahl(m.reduce((a, b) => a + b, 0))} Nester<br>Primär: ${zahl(m[0])} gesichert, ${zahl(m[1])} nach Datum<br>Sekundär: ${zahl(m[2])} gesichert, ${zahl(m[3])} nach Datum<br>unklar: ${zahl(m[4])}`;
+    } };
+  });
+  balken("#multiples", panels, serien.map(([t, st]) => ({ farbe: farben[t], deckkraft: st === "d" ? 0.8 : 1 })));
+}
+
+// Alle Funde im gesamten Zeitraum, Kalendermonate nach Funddatum
+function zeichneGesamt(N, E) {
+  // Beginn: Januar des ersten Jahres mit Nestmeldungen (vereinzelte frühere Einzeltiere fallen weg)
+  const start = N.map((n) => n.d).sort()[0].slice(0, 4) + "-01", ende = ausIdx(HEUTE).toISOString().slice(0, 7);
+  const monate = [];
+  for (let [y, m] = start.split("-").map(Number); `${y}-${String(m).padStart(2, "0")}` <= ende; m === 12 ? (y++, m = 1) : m++) monate.push(`${y}-${String(m).padStart(2, "0")}`);
+  const idx = new Map(monate.map((m, i) => [m, i]));
+  const serien = ["P", "S", "U", "K"];
+  const z = monate.map(() => [0, 0, 0, 0]), ze = monate.map(() => [0]);
+  for (const n of N) { const i = idx.get(n.d.slice(0, 7)); if (i != null) z[i][serien.indexOf(n.kat2)]++; }
+  for (const e of E) { const i = idx.get(e.d.slice(0, 7)); if (i != null) ze[i][0]++; }
+  const labels = monate.map((m) => m.endsWith("-01") ? m.slice(0, 4) : (monate.length < 30 ? MON_KURZ[+m.slice(5) - 1] : ""));
+  const trenn = monate.map((m, i) => (m.endsWith("-01") && i ? i : null)).filter((i) => i != null);
+  const name = (i) => `${MON_LANG[+monate[i].slice(5) - 1]} ${monate[i].slice(0, 4)}`;
+  balken("#gesamt-nester", [{ labels, werte: z, trenn, tip: (i) => `<b>${name(i)}</b><br>Primärnester: ${zahl(z[i][0])}<br>Sekundärnester: ${zahl(z[i][1])}<br>unklar: ${zahl(z[i][2])}<br>Königinnen: ${zahl(z[i][3])}<br>Einzeltiere: ${zahl(ze[i][0])}` }],
+    serien.map((t) => ({ farbe: farben[t] })), { W: 1000, H: 190 });
+  balken("#gesamt-einzel", [{ labels, werte: ze, trenn, tip: (i) => `<b>${name(i)}</b><br>Einzeltiere: ${zahl(ze[i][0])}<br>Nester und Königinnen: ${zahl(z[i].reduce((a, b) => a + b, 0))}` }],
+    [{ farbe: farben.einzelchart }], { W: 1000, H: 150 });
+}
+
+// Entfernte Nester je Fundmonat, nach Nesttyp
+function zeichneEntfernt(saisons, nn) {
+  const serien = ["P", "S", "U"];
+  const panels = saisons.map((s) => {
+    const z = Array.from({ length: 15 }, () => [0, 0, 0]);
+    for (const n of nn) {
+      if (n.saison !== s || !istEnt(n)) continue;
+      const i = saisonMonat(n);
+      if (i >= 0 && i <= 14) z[i][serien.indexOf(n.kat2)]++;
+    }
+    const tot = z.flat().reduce((a, b) => a + b, 0);
+    return { titel: `Saison ${s} · ${zahl(tot)} entfernt`, labels: SAISON_LBL, werte: z, trenn: [12], tip: (i) =>
+      `<b>gefunden ${monatName(s, i)}</b><br>davon entfernt: ${zahl(z[i][0] + z[i][1] + z[i][2])}<br>Primärnester: ${zahl(z[i][0])}<br>Sekundärnester: ${zahl(z[i][1])}<br>unklar: ${zahl(z[i][2])}` };
+  });
+  balken("#entfernt-total", panels, serien.map((t) => ({ farbe: farben[t] })));
+}
+
+// Gemeldet vs. entfernt je Fundmonat, absolut oder als Anteil
+let entfProzent = false;
+function zeichneEntferntAnteil(saisons, nn) {
+  const panels = saisons.map((s) => {
+    const z = Array.from({ length: 15 }, () => [0, 0]);
+    for (const n of nn) {
+      if (n.saison !== s) continue;
+      const i = saisonMonat(n);
+      if (i >= 0 && i <= 14) z[i][istEnt(n) ? 0 : 1]++;
+    }
+    const e = z.reduce((a, m) => a + m[0], 0), g = z.reduce((a, m) => a + m[0] + m[1], 0);
+    return { titel: `Saison ${s} · ${pct(e, g)} entfernt`, labels: SAISON_LBL, werte: z, trenn: [12], tip: (i) =>
+      `<b>gefunden ${monatName(s, i)}</b><br>neu gemeldet: ${zahl(z[i][0] + z[i][1])}<br>als entfernt gemeldet: ${zahl(z[i][0])} (${pct(z[i][0], z[i][0] + z[i][1])})<br>nicht als entfernt gemeldet: ${zahl(z[i][1])}` };
+  });
+  balken("#entfernt-anteil", panels, [{ farbe: farben.entfernt }, { farbe: farben.offen }], { prozent: entfProzent, minN: 5 });
 }
 
 // ---------- Start ----------

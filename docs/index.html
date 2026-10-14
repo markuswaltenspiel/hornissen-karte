@@ -11,6 +11,7 @@
   --bg: #f6f5f2; --surface: #fcfcfb; --surface-2: #f0efec; --border: #dcdad3;
   --text: #0b0b0b; --text-2: #52514e; --muted: #7a7974; --accent: #2a78d6;
   --primaer: #2a78d6; --sekundaer: #eb6834; --koenigin: #1baf7a; --unklar: #8a8984; --einzel: #3b3a37;
+  --einzelchart: #52514e; --entfernt: #6250d6; --offen: #a3a19b;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -18,6 +19,7 @@
     --bg: #121211; --surface: #1a1a19; --surface-2: #262624; --border: #3a3a37;
     --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e88; --accent: #3987e5;
     --primaer: #3987e5; --sekundaer: #d95926; --koenigin: #199e70; --unklar: #8f8e88; --einzel: #e0dfda;
+    --einzelchart: #c3c2b7; --entfernt: #9085e9; --offen: #6e6d68;
   }
 }
 * { box-sizing: border-box; }
@@ -76,6 +78,9 @@ tbody tr:hover { background: var(--surface-2); }
 .legende span { display: inline-flex; gap: 6px; align-items: center; }
 .multiples { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
 .multiples figure { margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.breit { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.breit figure { margin: 0; }
+.umschalter label { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
 .multiples figcaption { font-weight: 600; margin-bottom: 2px; }
 svg text { fill: var(--text-2); font-size: 11px; }
 svg .grid { stroke: var(--border); stroke-width: 1; }
