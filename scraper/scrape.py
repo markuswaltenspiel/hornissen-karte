@@ -38,10 +38,11 @@ SAISON_START_MONAT = 4
 # Abschnitt "Prüfung der Datumsregel".
 SEKUNDAER_AB_MONAT = 8
 
-# Folgemeldung: Eine spätere, als entfernt markierte Meldung höchstens so weit
-# entfernt gilt als Entfernung des früheren Nests (Stichprobe: meist dasselbe Nest).
-PAAR_MAX_M = 20
-PAAR_MAX_TAGE = 120
+# Doppelmeldungen: Eine Nestmeldung höchstens so weit und so lange nach der ersten
+# Meldung eines Nests (gleiche Saison) gilt als dasselbe Nest und wird zusammengeführt.
+# Stichprobe: ~3/4 solcher Paare sind wirklich dasselbe Nest.
+DOPPEL_MAX_M = 20
+DOPPEL_MAX_TAGE = 120
 
 # Abbruch, wenn eine Quelle plötzlich deutlich weniger Datensätze liefert
 # (z. B. weil der Dienst umgebaut wurde) – lieber laut scheitern als leere Karte.
@@ -165,34 +166,70 @@ def abstand_m(lat1, lon1, lat2, lon2):
     return 6371000 * math.hypot(x, math.radians(lat2 - lat1))
 
 
-def verknuepfe_folgemeldungen(nester):
-    """Nest ohne Entfernt-Angabe + spätere Entfernt-Meldung am selben Ort -> vermutlich entfernt."""
-    raster = defaultdict(list)
-    for b in nester:
-        if b["kat"] == "nest" and b["ent"] in ("feld", "text"):
-            raster[(int(b["lat"] * 500), int(b["lon"] * 500))].append(b)  # ~200 m Zellen
-    kandidaten = []
-    for a in nester:
-        if a["kat"] != "nest" or a["ent"] not in ("?", "nein"):
-            continue
-        da = dt.date.fromisoformat(a["d"])
-        ky, kx = int(a["lat"] * 500), int(a["lon"] * 500)
+STUFE_RANG = {"g": 2, "d": 1, "u": 0}
+IND_RANG = {k: i for i, k in enumerate(["1 Ind.", "2-5 Ind.", "6-10 Ind.", "6-25 Ind.", "11-20 Ind.",
+                                         "21-50 Ind.", "26-100 Ind.", "51-100 Ind.", "> 100 Ind.",
+                                         "> 1000 Ind.", "> 10000 Ind."])}
+
+
+def fuehre_doppelmeldungen_zusammen(nester):
+    """Fasst Mehrfachmeldungen desselben Nests zu einem Eintrag zusammen."""
+    andere = [n for n in nester if n["kat"] != "nest"]
+    gruppen, raster = [], defaultdict(list)
+    for n in sorted((n for n in nester if n["kat"] == "nest"), key=lambda n: (n["d"], n["id"])):
+        d = dt.date.fromisoformat(n["d"])
+        ky, kx = int(n["lat"] * 500), int(n["lon"] * 500)  # ~200 m Zellen
+        beste = None
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
-                for b in raster.get((ky + dy, kx + dx), ()):
-                    tage = (dt.date.fromisoformat(b["d"]) - da).days
-                    if b["saison"] != a["saison"] or not 0 <= tage <= PAAR_MAX_TAGE:
+                for g in raster.get((ky + dy, kx + dx), ()):
+                    a = g[0]
+                    if a["saison"] != n["saison"] or (d - dt.date.fromisoformat(a["d"])).days > DOPPEL_MAX_TAGE:
                         continue
-                    m = abstand_m(a["lat"], a["lon"], b["lat"], b["lon"])
-                    if m <= PAAR_MAX_M:
-                        kandidaten.append((m, tage, a, b))
-    vergeben = set()
-    for m, tage, a, b in sorted(kandidaten, key=lambda k: (k[0], k[1])):
-        if a["id"] in vergeben or b["id"] in vergeben:
-            continue
-        vergeben |= {a["id"], b["id"]}
-        datum_b = max(b["entd"] or b["d"], a["d"])
-        a.update(ent="paar", entd=datum_b, entq="paar", paar=b["id"], paar_m=round(m))
+                    m = abstand_m(a["lat"], a["lon"], n["lat"], n["lon"])
+                    if m <= DOPPEL_MAX_M and (beste is None or m < beste[0]):
+                        beste = (m, g)
+        if beste:
+            beste[1].append(n)
+        else:
+            g = [n]
+            gruppen.append(g)
+            raster[(ky, kx)].append(g)
+    return andere + [vereinige(g) for g in gruppen]
+
+
+def vereinige(g):
+    erste = g[0]
+    if len(g) == 1:
+        erste["ids"] = [erste["id"]]
+        return erste
+    n = dict(erste)
+    n["ids"] = [x["id"] for x in g]
+    # Typ: die am besten belegte Einordnung, bei Gleichstand die späteste Meldung
+    typ_von = max(g, key=lambda x: (STUFE_RANG[x["stufe"]], x["d"]))
+    n.update(typ=typ_von["typ"], regel=typ_von["regel"], stufe=typ_von["stufe"])
+    inds = [x["ind"] for x in g if x["ind"]]
+    n["ind"] = max(inds, key=lambda i: IND_RANG.get(i, -1)) if inds else None
+    n["frei"] = "ja" if any(x["frei"] == "ja" for x in g) else "offen" if any(x["frei"] == "offen" for x in g) else "nein"
+    n["m"] = min(x["m"] for x in g)
+    # Entfernt: früheste bekannte Entfernung; eine spätere Entfernt-Meldung datiert über ihr Funddatum
+    weg = [x for x in g if x["ent"] in ("feld", "text")]
+    if weg:
+        n["ent"] = weg[0]["ent"]
+        daten = []
+        for x in weg:
+            if x["entd"]:
+                daten.append((x["entd"], x["entq"], x["id"]))
+            elif x is not erste:
+                daten.append((x["d"], "folge", x["id"]))
+        if daten:
+            entd, entq, quelle = min(daten)
+            n.update(entd=max(entd, erste["d"]), entq=entq, ent_id=quelle)
+        else:
+            n.update(entd=None, entq=None)
+    elif any(x["ent"] == "nein" for x in g):
+        n["ent"] = "nein"
+    return n
 
 
 def pruefe_schwund(name, anzahl, vorher):
@@ -279,7 +316,9 @@ def main():
             "kreis": a.get("kreis"), "gem": a.get("gemeinde"),
         })
 
-    verknuepfe_folgemeldungen(nester)
+    roh_anzahl = sum(1 for n in nester if n["kat"] == "nest")
+    nester = fuehre_doppelmeldungen_zusammen(nester)
+    print(f"Doppelmeldungen: {roh_anzahl} Nestmeldungen -> {sum(1 for n in nester if n['kat'] == 'nest')} Nester")
 
     # Einzeltiere mit Abstand zum nächsten bekannten Nest derselben Saison
     raster = defaultdict(list)

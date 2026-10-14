@@ -24,7 +24,7 @@ const REGEL = {
   rest: ["Juli bis Stichmonat, Schätzung ≤ 100 oder fehlt → unklar", "u"],
 };
 const STUFE = { g: "gesichert (Regeln 1–4)", d: "nach Meldedatum", u: "unklar" };
-const ENT_NAME = { feld: "ja (Meldefeld „beseitigt“)", text: "ja (laut Freitext)", paar: "vermutlich (spätere Entfernt-Meldung am selben Ort)", nein: "nein (Meldefeld)", "?": "keine Angabe" };
+const ENT_NAME = { feld: "ja (Meldefeld „beseitigt“)", text: "ja (laut Freitext)",  nein: "nein (Meldefeld)", "?": "keine Angabe" };
 const IND_ORDER = ["1 Ind.", "2-5 Ind.", "6-10 Ind.", "11-20 Ind.", "21-50 Ind.", "51-100 Ind.", "> 100 Ind.", "> 1000 Ind.", "> 10000 Ind."];
 
 const ARCGIS = "https://www.arcgishostedserver.nrw.de/arcgis/rest/services/Hosted";
@@ -33,7 +33,7 @@ const QUELLE = {
   nest: { layer: "Sicht_Vespa_velutina", ds: "dataSource_5-19e64cf540b-layer-8" },
   einzel: { layer: "Sicht_Vespa_velutina_Einzeltiere", ds: "dataSource_5-19e64cf4e60-layer-7" },
 };
-const istEnt = (n) => n.ent === "feld" || n.ent === "text" || n.ent === "paar";
+const istEnt = (n) => n.ent === "feld" || n.ent === "text";
 
 let farben = {};
 function leseFarben() {
@@ -78,7 +78,7 @@ function stilNest(n, kat, status, neu, blass) {
   if (status === "entfernt") return { radius: r, color: c, weight: 2.5, opacity: 1, dashArray: null, fillColor: c, fillOpacity: 0 };
   if (status === "entfernt_unb") return { radius: r, color: c, weight: 2, opacity: 1, dashArray: "2 3", fillColor: c, fillOpacity: 0 };
   // Nur über den Fundmonat eingeordnet: Kontur in der eigenen Farbe, etwas hellere Füllung
-  if (blass) return { radius: r, color: c, weight: 1.5, opacity: 1, dashArray: null, fillColor: c, fillOpacity: 0.65 };
+  if (blass) return { radius: r, color: c, weight: 1, opacity: 1, dashArray: null, fillColor: c, fillOpacity: 0.8 };
   return { radius: r, color: farben.surface, weight: 1, opacity: 1, dashArray: null, fillColor: c, fillOpacity: 0.95 };
 }
 function statusZu(n, T) {
@@ -90,7 +90,7 @@ function statusZu(n, T) {
 function popupNest(n) {
   const regel = n.regel ? REGEL[n.regel] : null;
   const ent = istEnt(n);
-  const QT = { text: "aus Freitext", meldung: "war bei der Meldung schon entfernt", beob: "spätestens; an diesem Tag erstmals als entfernt gesehen", paar: "Funddatum der Folgemeldung" };
+  const QT = { text: "aus Freitext", meldung: "war bei der Meldung schon entfernt", beob: "spätestens; an diesem Tag erstmals als entfernt gesehen", folge: "Funddatum der späteren Meldung, die „entfernt“ sagt" };
   const entDatum = n.entd ? `${fmtIso(n.entd)} (${QT[n.entq] || ""})` : "unbekannt";
   return `<b>${KAT_NAME[n.kat2]}</b>${regel ? `<br><span style="color:#52514e">${esc(regel[0])} · ${STUFE[n.stufe]}</span>` : ""}
   <table>
@@ -100,16 +100,17 @@ function popupNest(n) {
   <tr><td>Tiere (Schätzung)</td><td>${esc(n.ind || "keine Angabe")}</td></tr>
   <tr><td>Entfernt</td><td>${ENT_NAME[n.ent]}</td></tr>
   ${ent ? `<tr><td>Entfernt am</td><td>${entDatum}</td></tr>` : ""}
-  ${n.paar ? `<tr><td>Folgemeldung</td><td><a href="${LANUK_APP}${QUELLE.nest.ds}:${n.paar}" target="_blank" rel="noopener">ID ${n.paar}</a>, ${n.paar_m} m entfernt</td></tr>` : ""}
+  ${n.ids && n.ids.length > 1 ? `<tr><td>Meldungen</td><td>${n.ids.length} am selben Ort (zusammengeführt)</td></tr>` : ""}
   <tr><td>Freigabe</td><td>${{ ja: "freigegeben", offen: "noch nicht bewertet", nein: "nicht freigegeben" }[n.frei]}</td></tr>
   <tr><td>Ort</td><td>${esc(n.gem || "")}${n.kreis && n.kreis !== n.gem ? ", " + esc(n.kreis) : ""}</td></tr>
-  </table>${quelleLinks("nest", n.id)}`;
+  </table>${quelleLinks("nest", n.ids || [n.id])}`;
 }
 
-function quelleLinks(art, id) {
-  const fertig = fotoCache.get(art + id);
-  return `<div class="fotos" data-art="${art}" data-id="${id}"${fertig != null ? ' data-geladen="1"' : ""}>${fertig ?? '<span style="color:#7a7974;font-size:12px">Fotos werden geladen …</span>'}</div>
-  <a href="${LANUK_APP}${QUELLE[art].ds}:${id}" target="_blank" rel="noopener">In der LANUK-Karte öffnen ↗</a><br><span style="color:#7a7974;font-size:11px">mit Bemerkung und Fotos · ID ${id}</span>`;
+function quelleLinks(art, ids) {
+  const key = art + ids.join(","), fertig = fotoCache.get(key);
+  const link = (id) => `<a href="${LANUK_APP}${QUELLE[art].ds}:${id}" target="_blank" rel="noopener">${ids.length > 1 ? "Meldung " + id : "In der LANUK-Karte öffnen"} ↗</a>`;
+  return `<div class="fotos" data-art="${art}" data-ids="${ids.join(",")}"${fertig != null ? ' data-geladen="1"' : ""}>${fertig ?? '<span style="color:#7a7974;font-size:12px">Fotos werden geladen …</span>'}</div>
+  ${ids.length > 1 ? `In der LANUK-Karte öffnen:<br>${ids.map(link).join("<br>")}` : link(ids[0])}<br><span style="color:#7a7974;font-size:11px">mit Bemerkung und Fotos${ids.length > 1 ? "" : " · ID " + ids[0]}</span>`;
 }
 
 const fotoCache = new Map();
@@ -118,14 +119,15 @@ async function ladeFotos(popup) {
   const el = popup.getElement()?.querySelector(".fotos");
   if (!el || el.dataset.geladen) return;
   el.dataset.geladen = "1";
-  const { layer } = QUELLE[el.dataset.art], id = el.dataset.id, key = el.dataset.art + id;
+  const { layer } = QUELLE[el.dataset.art], ids = el.dataset.ids, key = el.dataset.art + ids;
   const setze = (html) => { fotoCache.set(key, html); popup.update(); };
   try {
-    const r = await fetch(`${ARCGIS}/${layer}/FeatureServer/0/queryAttachments?objectIds=${id}&f=json`).then((x) => x.json());
-    const infos = (r.attachmentGroups?.[0]?.attachmentInfos || []).filter((a) => (a.content_type || a.contentType || "").startsWith("image/"));
+    const r = await fetch(`${ARCGIS}/${layer}/FeatureServer/0/queryAttachments?objectIds=${ids}&f=json`).then((x) => x.json());
+    const infos = (r.attachmentGroups || []).flatMap((g) => g.attachmentInfos.map((a) => ({ ...a, oid: g.parentObjectId })))
+      .filter((a) => (a.content_type || a.contentType || "").startsWith("image/"));
     if (!infos.length) return setze(`<span style="color:#7a7974;font-size:12px">Keine Fotos</span>`);
     setze(infos.slice(0, 6).map((a) => {
-      const url = `${ARCGIS}/${layer}/FeatureServer/0/${id}/attachments/${a.attachmentid ?? a.id}`;
+      const url = `${ARCGIS}/${layer}/FeatureServer/0/${a.oid}/attachments/${a.attachmentid ?? a.id}`;
       return `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Foto" loading="lazy"></a>`;
     }).join("") + (infos.length > 6 ? `<span style="font-size:12px">+${infos.length - 6}</span>` : ""));
   } catch { setze(`<span style="color:#7a7974;font-size:12px">Fotos nicht abrufbar</span>`); }
@@ -136,7 +138,7 @@ function popupEinzel(e) {
   <tr><td>Fund</td><td>${fmtIso(e.d)}</td></tr>
   <tr><td>Nächstes Nest</td><td>${e.dn == null ? "über 10 km" : (e.dn / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " km"}</td></tr>
   <tr><td>Freigabe</td><td>${{ ja: "freigegeben", offen: "noch nicht bewertet", nein: "nicht freigegeben" }[e.frei]}</td></tr>
-  </table>${quelleLinks("einzel", e.id)}`;
+  </table>${quelleLinks("einzel", [e.id])}`;
 }
 
 function zeichneKarte() {
@@ -254,7 +256,7 @@ function initVergleich() {
   for (const m of [mapA, mapB]) m.on("popupopen", (ev) => ladeFotos(ev.popup));
   const leg = (c, t, extra = "") => `<span><span class="dot ${extra}" style="${extra ? "border-color" : "background"}:var(--${c})${extra === "ring dash" ? ";border-style:dashed" : ""}"></span>${t}</span>`;
   $("#vgl-legende").innerHTML = leg("primaer", "Primärnest") + leg("sekundaer", "Sekundärnest") + leg("unklar", "unklar")
-    + leg("text-2", "entfernt, Datum bekannt", "ring") + leg("text-2", "entfernt, Zeitpunkt unbekannt", "ring dash") + `<span style="color:var(--muted)">heller mit Kontur = nur nach Fundmonat eingeordnet</span>`;
+    + leg("text-2", "entfernt, Datum bekannt", "ring") + leg("text-2", "entfernt, Zeitpunkt unbekannt", "ring dash") + `<span style="color:var(--muted)">etwas etwas heller = nur nach Fundmonat eingeordnet</span>`;
   zeichneVergleich();
 }
 
@@ -272,18 +274,19 @@ function statistik() {
     ["Sekundärnest, nach Meldedatum", proSaison((n) => n.kat2 === "S" && n.stufe === "d"), "sub"],
     ["unklar", proSaison((n) => n.kat2 === "U"), "sub"],
     ["Königin ohne Nestangabe", proSaison((n) => n.kat2 === "K")],
+    ["zusammengeführte Doppelmeldungen", proSaison((n) => nest(n) && n.ids && n.ids.length > 1).map((_, j) => N.filter((n) => nest(n) && n.saison === saisons[j]).reduce((a, n) => a + (n.ids ? n.ids.length - 1 : 0), 0)), "sub"],
     ["Nester als entfernt gemeldet", proSaison((n) => nest(n) && istEnt(n)), "fett"],
     ["über Meldefeld „beseitigt“", proSaison((n) => nest(n) && n.ent === "feld"), "sub"],
     ["nur laut Freitext", proSaison((n) => nest(n) && n.ent === "text"), "sub"],
-    ["vermutlich, über Folgemeldung am selben Ort", proSaison((n) => nest(n) && n.ent === "paar"), "sub"],
     ["Meldefeld „nein“", proSaison((n) => nest(n) && n.ent === "nein"), "sub"],
     ["keine Angabe", proSaison((n) => nest(n) && n.ent === "?"), "sub"],
+    ["Entfernungsdatum aus späterer Meldung am selben Ort", proSaison((n) => nest(n) && n.entq === "folge"), "sub"],
     ["Einzeltiere", saisons.map((s) => E.filter((e) => e.saison === s).length), "fett"],
     [`davon ohne Nest im Umkreis von ${zustand.radius / 1000} km`, saisons.map((s) => E.filter((e) => e.saison === s && (e.dn == null || e.dn > zustand.radius)).length), "sub"],
   ];
   const nestSumme = proSaison(nest);
   const tab1 = `<table><thead><tr><th>Saison</th>${saisons.map((s) => `<th>${s}</th>`).join("")}</tr></thead><tbody>${reihen.map(([t, w, art], i) => {
-    const anteil = i >= 1 && i <= 5 || i >= 7 && i <= 12;
+    const anteil = i >= 1 && i <= 5 || i >= 8 && i <= 13;
     return `<tr class="${art === "sub" ? "sub" : ""}" style="${art === "fett" ? "font-weight:600" : ""}"><td>${t}</td>${w.map((v, j) => `<td>${zahl(v)}${anteil ? ` <span style="color:var(--muted)">${pct(v, nestSumme[j])}</span>` : ""}</td>`).join("")}</tr>`;
   }).join("")}</tbody></table>`;
 
@@ -312,10 +315,10 @@ function statistik() {
 
   $("#statistik").innerHTML = `
     <h3>Übersicht nach Saison</h3>
-    <p class="erkl">Eine Saison umfasst Primärnester und Königinnen eines Kalenderjahres sowie die übrigen Nester bis Ende März des Folgejahres. „Gesichert“ heißt: eingeordnet über Freitext oder Tierzahl (Regeln 1–4). „Nach Meldedatum“: nur über den Fundmonat. Prozentwerte beziehen sich auf die Nesteinträge der Saison.</p>
+    <p class="erkl">Doppelmeldungen sind herausgerechnet: Meldungen höchstens 20 m und 120 Tage nach der ersten Meldung eines Nests derselben Saison zählen als dasselbe Nest. Eine Saison umfasst Primärnester und Königinnen eines Kalenderjahres sowie die übrigen Nester bis Ende März des Folgejahres. „Gesichert“ heißt: eingeordnet über Freitext oder Tierzahl (Regeln 1–4). „Nach Meldedatum“: nur über den Fundmonat. Prozentwerte beziehen sich auf die Nesteinträge der Saison.</p>
     <div class="tabwrap">${tab1}</div>
     <h3>Nester je Fundmonat</h3>
-    <div class="legende"><span><span class="dot" style="background:var(--primaer)"></span>Primärnest</span><span><span class="dot" style="background:var(--sekundaer)"></span>Sekundärnest</span><span><span class="dot" style="background:var(--unklar)"></span>unklar</span><span style="color:var(--muted)">heller = nur nach Fundmonat eingeordnet</span></div>
+    <div class="legende"><span><span class="dot" style="background:var(--primaer)"></span>Primärnest</span><span><span class="dot" style="background:var(--sekundaer)"></span>Sekundärnest</span><span><span class="dot" style="background:var(--unklar)"></span>unklar</span><span style="color:var(--muted)">etwas heller = nur nach Fundmonat eingeordnet</span></div>
     <div class="multiples" id="multiples"></div>
     <h3>Wie die Nester eingeordnet wurden</h3>
     <p class="erkl">Die Regeln greifen in dieser Reihenfolge; die erste passende gilt.</p>
