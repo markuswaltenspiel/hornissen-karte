@@ -38,12 +38,12 @@ const istEnt = (n) => n.ent === "feld" || n.ent === "text";
 let farben = {};
 function leseFarben() {
   const cs = getComputedStyle(document.documentElement);
-  for (const k of ["primaer", "sekundaer", "koenigin", "unklar", "einzel", "einzelchart", "entfernt", "offen", "surface", "text-2"]) farben[k] = cs.getPropertyValue("--" + k).trim();
+  for (const k of ["primaer", "sekundaer", "koenigin", "unklar", "einzel", "einzelchart", "entfernt", "offen", "gbif", "surface", "text-2"]) farben[k] = cs.getPropertyValue("--" + k).trim();
   farben.P = farben.primaer; farben.S = farben.sekundaer; farben.K = farben.koenigin; farben.U = farben.unklar;
 }
 
 // ---------- Daten ----------
-let NESTER = [], EINZEL = [], META = {}, HEUTE = 0;
+let NESTER = [], EINZEL = [], GBIF = [], META = {}, HEUTE = 0;
 
 function saisonZu(t, kat) {
   const d = ausIdx(t), y = d.getUTCFullYear();
@@ -53,7 +53,7 @@ function saisonZu(t, kat) {
 
 const zustand = {
   saisons: new Set(), vorjahr: true, typen: new Set(["P", "S", "U", "K"]), nurGesichert: false,
-  ent: new Set(["aktiv", "entfernt", "entfernt_unb"]), unfrei: false, einzel: false, radius: 2000,
+  ent: new Set(["aktiv", "entfernt", "entfernt_unb"]), unfrei: false, einzel: false, gbif: false, alleEinzel: false, radius: 2000,
   T: 0, zeitAktiv: false,
 };
 
@@ -63,7 +63,7 @@ const anzeigeKat = (n) => (zustand.nurGesichert && n.stufe === "d") ? "U" : n.ka
 // ---------- Karte ----------
 let karte, renderer, popupOffen = null;
 const KACHELN = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Daten: <a href="https://neobiota.naturschutzinformationen.nrw.de">LANUK NRW</a>';
+const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Daten: <a href="https://neobiota.naturschutzinformationen.nrw.de">LANUK NRW</a>, <a href="https://www.gbif.org/species/1311477">GBIF.org</a>';
 
 function neueKarte(id) {
   const m = L.map(id, { preferCanvas: true, minZoom: 6 }).setView([51.45, 7.55], 8);
@@ -133,17 +133,29 @@ async function ladeFotos(popup) {
   } catch { setze(`<span style="color:#7a7974;font-size:12px">Fotos nicht abrufbar</span>`); }
 }
 
+const fernVonNest = (x) => zustand.alleEinzel || x.dn == null || x.dn > zustand.radius;
+const kmText = (dn) => dn == null ? "über 10 km" : (dn / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " km";
+
+function popupGbif(g) {
+  return `<b>Sichtung (${esc(g.q)})</b><table>
+  <tr><td>Fund</td><td>${fmtIso(g.d)}</td></tr>
+  <tr><td>Nächstes Nest</td><td>${kmText(g.dn)}</td></tr>
+  <tr><td>Lizenz</td><td>${esc(g.lic)}</td></tr></table>
+  ${g.url ? `<a href="${esc(g.url)}" target="_blank" rel="noopener">Originalbeobachtung öffnen ↗</a><br>` : ""}
+  <a href="https://www.gbif.org/occurrence/${g.id}" target="_blank" rel="noopener">GBIF-Datensatz ↗</a><br><span style="color:#7a7974;font-size:11px">Beobachtung über GBIF.org, ${esc(g.q)}</span>`;
+}
+
 function popupEinzel(e) {
   return `<b>Einzeltier</b><table>
   <tr><td>Fund</td><td>${fmtIso(e.d)}</td></tr>
-  <tr><td>Nächstes Nest</td><td>${e.dn == null ? "über 10 km" : (e.dn / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " km"}</td></tr>
+  <tr><td>Nächstes Nest</td><td>${kmText(e.dn)}</td></tr>
   <tr><td>Freigabe</td><td>${{ ja: "freigegeben", offen: "noch nicht bewertet", nein: "nicht freigegeben" }[e.frei]}</td></tr>
   </table>${quelleLinks("einzel", [e.id])}`;
 }
 
 function zeichneKarte() {
   const T = zustand.zeitAktiv ? zustand.T : HEUTE;
-  const zaehl = { P: 0, S: 0, U: 0, K: 0, aktiv: 0, entfernt: 0, entfernt_unb: 0, E: 0 };
+  const zaehl = { P: 0, S: 0, U: 0, K: 0, aktiv: 0, entfernt: 0, entfernt_unb: 0, E: 0, G: 0 };
   for (const n of NESTER) {
     let sichtbar = freiOk(n) && zustand.saisons.has(n.saison) && n.t <= T;
     const kat = anzeigeKat(n);
@@ -164,13 +176,22 @@ function zeichneKarte() {
   }
   for (const e of EINZEL) {
     let sichtbar = zustand.einzel && freiOk(e) && zustand.saisons.has(e.saison) && e.t <= T
-      && (e.dn == null || e.dn > zustand.radius);
+      && fernVonNest(e);
     if (sichtbar && zustand.vorjahr && e.saison < ausIdx(T).getUTCFullYear()) sichtbar = false;
     if (sichtbar) {
       zaehl.E++;
       if (!e.marker) e.marker = L.circleMarker([e.lat, e.lon], { renderer, radius: 3, stroke: false, fillColor: farben.einzel, fillOpacity: 0.85 }).bindPopup(() => popupEinzel(e), { maxWidth: 320 });
       if (!e.an) { e.marker.addTo(karte); e.an = true; }
     } else if (e.an) { e.marker.remove(); e.an = false; }
+  }
+  for (const g of GBIF) {
+    let sichtbar = zustand.gbif && !g.lanuk && zustand.saisons.has(g.saison) && g.t <= T && fernVonNest(g);
+    if (sichtbar && zustand.vorjahr && g.saison < ausIdx(T).getUTCFullYear()) sichtbar = false;
+    if (sichtbar) {
+      zaehl.G++;
+      if (!g.marker) g.marker = L.circleMarker([g.lat, g.lon], { renderer, radius: 3.5, color: farben.surface, weight: 0.8, fillColor: farben.gbif, fillOpacity: 0.9 }).bindPopup(() => popupGbif(g), { maxWidth: 320 });
+      if (!g.an) { g.marker.addTo(karte); g.an = true; }
+    } else if (g.an) { g.marker.remove(); g.an = false; }
   }
   for (const el of $$("aside .n")) el.textContent = zahl(zaehl[el.dataset.n] || 0);
   $("#zeit-datum").textContent = fmt(T);
@@ -283,6 +304,8 @@ function statistik() {
     ["Entfernungsdatum aus späterer Meldung am selben Ort", proSaison((n) => nest(n) && n.entq === "folge"), "sub"],
     ["Einzeltiere", saisons.map((s) => E.filter((e) => e.saison === s).length), "fett"],
     [`davon ohne Nest im Umkreis von ${zustand.radius / 1000} km`, saisons.map((s) => E.filter((e) => e.saison === s && (e.dn == null || e.dn > zustand.radius)).length), "sub"],
+    ["Weitere Sichtungen (GBIF, ohne LANUK-Doppel)", saisons.map((s) => GBIF.filter((g) => g.saison === s && !g.lanuk).length), "fett"],
+    [`davon ohne Nest im Umkreis von ${zustand.radius / 1000} km`, saisons.map((s) => GBIF.filter((g) => g.saison === s && !g.lanuk && (g.dn == null || g.dn > zustand.radius)).length), "sub"],
   ];
   const nestSumme = proSaison(nest);
   const tab1 = `<table><thead><tr><th>Saison</th>${saisons.map((s) => `<th>${s}</th>`).join("")}</tr></thead><tbody>${reihen.map(([t, w, art], i) => {
@@ -508,7 +531,9 @@ function neuZeichnen() {
 
 async function start() {
   leseFarben();
-  const [n, e, m] = await Promise.all(["nester", "einzeltiere", "meta"].map((f) => fetch(`data/${f}.json`, { cache: "no-cache" }).then((r) => r.json())));
+  const [n, e, m, gb] = await Promise.all(["nester", "einzeltiere", "meta", "gbif"].map((f) => fetch(`data/${f}.json`, { cache: "no-cache" }).then((r) => r.ok ? r.json() : []).catch(() => [])));
+  GBIF = gb || [];
+  for (const x of GBIF) x.t = tagIdx(x.d);
   META = m;
   const MONL = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"], stich = m.sekundaer_ab_monat || 8;
   REGEL.ab_aug[0] = `ab ${MONL[stich - 1]}, Schätzung ≤ 100 oder fehlt → Sekundärnest`;
@@ -540,6 +565,8 @@ async function start() {
   $("#f-nurgesichert").onchange = (ev) => { zustand.nurGesichert = ev.target.checked; neuZeichnen(); };
   $("#f-unfrei").onchange = (ev) => { zustand.unfrei = ev.target.checked; neuZeichnen(); };
   $("#f-einzel").onchange = (ev) => { zustand.einzel = ev.target.checked; zeichneKarte(); };
+  $("#f-gbif").onchange = (ev) => { zustand.gbif = ev.target.checked; zeichneKarte(); };
+  $("#f-alle-einzel").onchange = (ev) => { zustand.alleEinzel = ev.target.checked; zeichneKarte(); };
   $("#f-radius").oninput = (ev) => { zustand.radius = +ev.target.value; $("#radius-wert").textContent = (zustand.radius / 1000).toLocaleString("de-DE") + " km"; zeichneKarte(); };
   $("#zeit").oninput = (ev) => { stop(); setzeZeit(+ev.target.value); };
   $("#play").onclick = play;

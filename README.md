@@ -45,3 +45,11 @@ Die erste passende Regel gilt:
 
 Einträge der Nester-Ebene ohne Nest im Stadium (nur „Königin“) werden als eigene
 Kategorie „Königin (ohne Nestangabe)“ geführt.
+
+## Datenquellen und Lizenzen
+
+- **LANUK NRW** – Neobiota-Portal, öffentliche ArcGIS-Dienste. Freitexte werden nur ausgewertet, nicht veröffentlicht.
+- **GBIF.org** – weitere Sichtungen in NRW (NABU|naturgucker, Observation.org, iNaturalist, ArtenFinder),
+  Lizenzen CC BY 4.0, CC BY-NC 4.0 und CC0 je Datensatz. Jede Sichtung verlinkt im Detailfeld auf den
+  GBIF-Datensatz und, soweit vorhanden, die Originalbeobachtung. Sichtungen, die bereits bei LANUK
+  gemeldet sind (≤ 50 m, ±3 Tage), werden ausgeblendet.

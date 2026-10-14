@@ -44,6 +44,28 @@ SEKUNDAER_AB_MONAT = 8
 DOPPEL_MAX_M = 20
 DOPPEL_MAX_TAGE = 120
 
+# Weitere Sichtungen aus GBIF (NABU|naturgucker, Observation.org, iNaturalist, ArtenFinder)
+GBIF_API = "https://api.gbif.org/v1/occurrence/search"
+GBIF_TAXON = 1311477          # Vespa velutina
+GBIF_GADM = "DEU.10_1"        # Nordrhein-Westfalen
+GBIF_MAX_UNSICHER_M = 2000    # ungenauere Koordinaten weglassen
+GBIF_QUELLEN = {
+    "6ac3f774-d9fb-4796-b3e9-92bf6c81c084": "NABU|naturgucker",
+    "8a863029-f435-446a-821e-275f4f641165": "Observation.org",
+    "50c9509d-22c7-4a22-a47d-8c48425ef4a7": "iNaturalist",
+    "aa6c5ee6-d4d7-4a65-a04f-379cffbf4842": "ArtenFinder",
+}
+
+
+def lizenz_kurz(url):
+    if "by-nc" in url:
+        return "CC BY-NC 4.0"
+    if "/by/" in url:
+        return "CC BY 4.0"
+    if "zero" in url:
+        return "CC0"
+    return url or "unbekannt"
+
 # Abbruch, wenn eine Quelle plötzlich deutlich weniger Datensätze liefert
 # (z. B. weil der Dienst umgebaut wurde) – lieber laut scheitern als leere Karte.
 MAX_SCHWUND = 0.2
@@ -232,6 +254,61 @@ def vereinige(g):
     return n
 
 
+def hole_json(url):
+    for versuch in range(4):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as r:
+                return json.load(r)
+        except Exception:
+            if versuch == 3:
+                raise
+            time.sleep(5 * (versuch + 1))
+
+
+def hole_gbif(heute):
+    """Alle Vespa-velutina-Funde in NRW aus GBIF, reduziert auf Ort, Datum, Quelle und Link."""
+    out, offset = [], 0
+    while True:
+        q = urllib.parse.urlencode(dict(
+            taxonKey=GBIF_TAXON, gadmGid=GBIF_GADM, hasCoordinate="true", hasGeospatialIssue="false",
+            occurrenceStatus="PRESENT", limit=300, offset=offset))
+        d = hole_json(f"{GBIF_API}?{q}")
+        for r in d["results"]:
+            unsicher = r.get("coordinateUncertaintyInMeters")
+            ed = (r.get("eventDate") or "")[:10]
+            if not ed or len(ed) < 10 or (unsicher and unsicher > GBIF_MAX_UNSICHER_M):
+                continue
+            try:
+                tag = dt.date.fromisoformat(ed)
+            except ValueError:
+                continue
+            if tag > heute or tag.year < 2014:
+                continue
+            ref = r.get("references") or ""
+            out.append({
+                "id": r["gbifID"], "lat": round(r["decimalLatitude"], 5), "lon": round(r["decimalLongitude"], 5),
+                "d": tag.isoformat(), "saison": tag.year,
+                "q": GBIF_QUELLEN.get(r.get("datasetKey"), r.get("datasetName") or "GBIF"),
+                "lic": lizenz_kurz(r.get("license", "")),
+                "url": ref if ref.startswith("http") else None,
+            })
+        offset += len(d["results"])
+        if d.get("endOfRecords") or not d["results"]:
+            return out
+
+
+def naechstes_nest(raster, saison, lat, lon):
+    best = None
+    ky, kx = int(lat * 50), int(lon * 50)
+    for dy in range(-5, 6):  # ±5 Rasterzellen ≈ ±10 km
+        for dx in range(-5, 6):
+            for n in raster.get((saison, ky + dy, kx + dx), ()):
+                m = abstand_m(lat, lon, n["lat"], n["lon"])
+                if best is None or m < best:
+                    best = m
+    return round(best) if best is not None else None
+
+
 def pruefe_schwund(name, anzahl, vorher):
     alt = vorher.get("anzahl", {}).get(name)
     if alt and anzahl < alt * (1 - MAX_SCHWUND):
@@ -332,28 +409,47 @@ def main():
         if d is None or "x" not in g or d > heute:
             continue
         lat, lon = g["y"], g["x"]
-        best = None
-        ky, kx = int(lat * 50), int(lon * 50)
-        for dy in range(-5, 6):  # ±5 Rasterzellen ≈ ±10 km
-            for dx in range(-5, 6):
-                for n in raster.get((d.year, ky + dy, kx + dx), ()):
-                    m = abstand_m(lat, lon, n["lat"], n["lon"])
-                    if best is None or m < best:
-                        best = m
+        best = naechstes_nest(raster, d.year, lat, lon)
         einzel.append({
             "id": a["objectid"], "lat": round(lat, 5), "lon": round(lon, 5),
             "d": d.isoformat(), "saison": d.year, "frei": freigabe(a.get("freigabe")),
-            "dn": round(best) if best is not None else None,  # Meter zum nächsten Nest, None = >10 km
+            "dn": best,  # Meter zum nächsten Nest, None = >10 km
         })
+
+    # GBIF: bei Fehler den letzten Stand behalten, LANUK-Aktualisierung nicht gefährden
+    gbif = None
+    try:
+        gbif = hole_gbif(heute)
+        alt = vorher.get("anzahl", {}).get("gbif")
+        if alt and len(gbif) < alt * (1 - MAX_SCHWUND):
+            print(f"WARNUNG: GBIF liefert {len(gbif)} statt {alt} – behalte alten Stand.")
+            gbif = None
+    except Exception as e:
+        print("WARNUNG: GBIF nicht erreichbar:", e)
+    if gbif is not None:
+        # Gleiche Beobachtung schon bei LANUK? (≤ 50 m, ±3 Tage)
+        lanuk = defaultdict(list)
+        for x in einzel + [n for n in nester if n["kat"] == "nest"]:
+            lanuk[(int(x["lat"] * 200), int(x["lon"] * 200))].append(x)
+        for r in gbif:
+            r["dn"] = naechstes_nest(raster, r["saison"], r["lat"], r["lon"])
+            tag = dt.date.fromisoformat(r["d"])
+            ky, kx = int(r["lat"] * 200), int(r["lon"] * 200)
+            r["lanuk"] = any(
+                abstand_m(r["lat"], r["lon"], x["lat"], x["lon"]) <= 50 and abs((dt.date.fromisoformat(x["d"]) - tag).days) <= 3
+                for dy in (-1, 0, 1) for dx in (-1, 0, 1) for x in lanuk.get((ky + dy, kx + dx), ()))
 
     OUT.mkdir(parents=True, exist_ok=True)
     STATE.parent.mkdir(parents=True, exist_ok=True)
     schreibe(OUT / "nester.json", nester)
     schreibe(OUT / "einzeltiere.json", einzel)
+    if gbif is not None:
+        schreibe(OUT / "gbif.json", gbif)
     STATE.write_text(json.dumps(state, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     meta = {
         "stand": dt.datetime.now(TZ).isoformat(timespec="minutes"),
-        "anzahl": {"nester": len(roh_n), "einzeltiere": len(roh_e), "gesamt": len(roh_g)},
+        "anzahl": {"nester": len(roh_n), "einzeltiere": len(roh_e), "gesamt": len(roh_g),
+                   "gbif": len(gbif) if gbif is not None else vorher.get("anzahl", {}).get("gbif")},
         "saison_start_monat": SAISON_START_MONAT,
         "sekundaer_ab_monat": SEKUNDAER_AB_MONAT,
         "quelle": f"{BASE} (LANUK NRW)",
@@ -361,7 +457,9 @@ def main():
     schreibe(OUT / "meta.json", meta, kompakt=False)
 
     c = Counter((n["kat"], n["typ"], n["stufe"]) for n in nester)
-    print(f"Nester: {len(nester)}, Einzeltiere: {len(einzel)}")
+    print(f"Nester: {len(nester)}, Einzeltiere: {len(einzel)}, GBIF: {len(gbif) if gbif is not None else 'alter Stand'}")
+    if gbif:
+        print("  GBIF-Quellen:", Counter(r["q"] for r in gbif), "| auch bei LANUK:", sum(r["lanuk"] for r in gbif))
     for k, v in sorted(c.items(), key=lambda x: -x[1]):
         print("  ", k, v)
     print("Entfernt:", Counter(n["ent"] for n in nester if n["kat"] == "nest"))
