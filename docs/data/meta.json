@@ -1,11 +1,11 @@
 {
-  "stand": "2026-10-30T11:56+01:00",
+  "stand": "2026-10-31T11:27+01:00",
   "anzahl": {
-    "nester": 9430,
-    "einzeltiere": 13221,
-    "gesamt": 16943,
+    "nester": 9484,
+    "einzeltiere": 13370,
+    "gesamt": 16969,
     "gbif": 7895,
-    "deutschland": 45082
+    "deutschland": 45280
   },
   "saison_start_monat": 4,
   "sekundaer_ab_monat": 8,
